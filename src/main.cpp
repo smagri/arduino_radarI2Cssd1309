@@ -49,18 +49,18 @@
 // Prescaler 8 gives good resolution for TC2 tick period as 8/16MHz = 0.5us
 #define prescalerTC2 8
 
-// Total _time_ taken for the counter to count from 0->TOP-1 again.
-// For the fast PWM TOP signal.
-float timer2_overflow_time_us;
+/// / Total _time_ taken for the counter to count from 0->TOP-1 again.
+// // For the fast PWM TOP signal.
+// float timer2_overflow_time_us;
 
-// T=1/F, the perioud of each clock tick.  Where is F/prescaler.
-//float clock_tc0;
-float period_of_tick;
+// // T=1/F, the perioud of each clock tick.  Where is F/prescaler.
+// //float clock_tc0;
+// float period_of_tick;
 
-// Kai's original code, causes my_delay_us() to hang as num_timer2_overflow overflows:
-//volatile unsigned int num_timer2_overflow = 0;
-//volatile unsigned int num_timer2_overflow_max_sonar = 0;
-//
+// // Kai's original code, causes my_delay_us() to hang as num_timer2_overflow overflows:
+// //volatile unsigned int num_timer2_overflow = 0;
+// //volatile unsigned int num_timer2_overflow_max_sonar = 0;
+// //
 // Avoids counter overflow in my_delay_us() for 1s delay.
 volatile uint32_t  num_timer2_compare_matches = 0;
 
