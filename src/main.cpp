@@ -283,9 +283,11 @@ int main(void){
 
         // Trigger the sonar
         bitClear(PORTC, pin_trigger);
-        my_delay_us(2);
+        //my_delay_us(2);
+        _delay_us(2);
         bitSet(PORTC, pin_trigger);
-        my_delay_us(11);
+        //my_delay_us(11);
+        _delay_us(11);
         bitClear(PORTC, pin_trigger);
         
         // We  disable interrupts  here as  we don't  want the  Timer1
@@ -299,7 +301,8 @@ int main(void){
         // Wait for falling edge capture, with a timeout
         unsigned long timeout = 30000;
         while (!echo_signal_high_detected && timeout > 0) {
-            my_delay_us(1);
+            //my_delay_us(1);
+            _delay_us(1);
             timeout--;
         }
 
@@ -331,7 +334,8 @@ int main(void){
             usart_send_string("No echo detected\n");
         }
         // Wait about 60 ms for hardware to reset before next sonar ping
-        my_delay_us(60000UL);
+//        my_delay_us(60000UL);
+        _delay_us(60000UL);
 
     }
 
