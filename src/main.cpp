@@ -52,11 +52,13 @@
 
 
 #define SERVO_MIN_PULSE_WIDTH 2000 // 1ms pulse measured on the oscilloscope.
-#define SERVO_MAX_PULSE_WIDTH 4000 // 2ms pulse measured on the oscilloscope.
+//#define SERVO_MAX_PULSE_WIDTH 4000 // 2ms pulse measured on the oscilloscope.
+#define SERVO_MAX_PULSE_WIDTH 3500 // 2ms pulse measured on the oscilloscope.
 
 // Drive from a angle greater than 0deg and less than 180deg, so we
 // don't overdirve servo.
 #define SERVO_MIN_ANGLE 15  // degrees
+//#define SERVO_MAX_ANGLE 165 // degrees
 #define SERVO_MAX_ANGLE 165 // degrees
 
 /// / Total _time_ taken for the counter to count from 0->TOP-1 again.
@@ -88,6 +90,17 @@ volatile float Tclk_tc1;
 
 volatile uint16_t numOV = 0;
 uint16_t icr1;
+
+// Setup State Types
+typedef enum{
+    INIT_MODE,
+    IDLE_MODE,
+    SERVO_MODE,
+    SONAR_MODE
+} State;
+
+volatile State state_current;
+
 
 
 // Function Prototypes
@@ -358,45 +371,60 @@ void config_tc1(void)
 
 
 int main(void){
+
+
+    state_current = INIT_MODE;
     
-    // Configure Sonar Pins
-    bitSet(DDRC, pin_trigger);    // HC-SR04 trigger pin as output
-    bitClear(PORTC, pin_trigger); // HC-SR04 trigger pin set to low
-    bitClear(DDRD, pin_echo);     // HC-SR04 echo as input
-    bitClear(PORTD, pin_echo);    // Disable internal pull-up resistor
-    //bitSet(PORTD, pin_echo);    // Disable internal pull-up resistor
+    while (1){
 
-    // Analog Comparator input pins
-    // PD6 = AIN0 = positive input, echo sinal of HC-SR04
-    // PD7 = AIN1 = negative input, 3.3V
-    bitClear(DDRD, PD6);
-    bitClear(DDRD, PD7);
+        switch (state_current){
+            
+            case INIT_MODE: {
+                // Configure Sonar Pins
+                bitSet(DDRC, pin_trigger);    // HC-SR04 trigger pin as output
+                bitClear(PORTC, pin_trigger); // HC-SR04 trigger pin set to low
+                bitClear(DDRD, pin_echo);     // HC-SR04 echo as input
+                bitClear(PORTD, pin_echo);    // Disable internal pull-up resistor
+                //bitSet(PORTD, pin_echo);    // Disable internal pull-up resistor
 
-    // Servo PWM pin OC1B/PB2/D10 as output.
-    bitSet(DDRB, pin_servo_pwm);
+                // Analog Comparator input pins
+                // PD6 = AIN0 = positive input, echo sinal of HC-SR04
+                // PD7 = AIN1 = negative input, 3.3V
+                bitClear(DDRD, PD6);
+                bitClear(DDRD, PD7);
+
+                // Servo PWM pin OC1B/PB2/D10 as output.
+                bitSet(DDRB, pin_servo_pwm);
     
     
-    usart_init(9600);
+                usart_init(9600);
 
-    // Connect Analog Comparator Output to Timer1 Input Capture.
-    bitSet(ACSR, ACIC);
+                // Connect Analog Comparator Output to Timer1 Input Capture.
+                bitSet(ACSR, ACIC);
 
-    // configure TC1, Timer/Counter 2 for AC + IC of HC-SR04 echo signal.                      
-    config_tc1(); // configure TC1, Timer/Counter 1
-    config_tc2(); // configure TC2, Timer/Counter 2
-
-    
-    sei(); // Enable global interrupts
+                // configure TC1, Timer/Counter 2 for AC + IC of HC-SR04 echo signal.                      
+                config_tc1(); // configure TC1, Timer/Counter 1
+                config_tc2(); // configure TC2, Timer/Counter 2
 
     
-    while (1) {
+                sei(); // Enable global interrupts
 
-
-        drive_servo();
-        
-
-        sonar();
-
+                state_current = SERVO_MODE;
+                break;
+            }
+            case SERVO_MODE: {
+                drive_servo();
+                state_current = SONAR_MODE;
+                break;
+            }
+            case SONAR_MODE: {
+                sonar();
+                state_current = SERVO_MODE;
+                break;
+            }
+            default:
+                break;
+        }
         
         
     } // end: while(1)
@@ -502,7 +530,7 @@ void drive_servo(void)
     // usart_send_num(angle, 4, 2);
     // usart_send_byte('\n');
 
-    _delay_ms(100); // let the servo settle at it's new angle
+    _delay_ms(200); // let the servo settle at it's new angle
 
 }
 
@@ -527,7 +555,7 @@ float sonar(void){
     _delay_us(2);
     bitSet(PORTC, pin_trigger);
     my_delay_us(11);
-    //_delay_us(11);
+    _delay_us(11);
     bitClear(PORTC, pin_trigger);
         
 
