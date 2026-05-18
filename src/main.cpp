@@ -104,7 +104,7 @@ void usart_send_num(float num, char num_int, char num_decimal);
 void config_tc2(void);
 void config_tc1(void);
 void my_delay_us(unsigned long x);
-float sonar(float tHigh);
+float sonar();
 void drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
 
@@ -131,7 +131,7 @@ ISR(TIMER1_CAPT_vect)
 
     float tmp = numOV * Tov + icr1 * Tclk_tc1;
 
-    // HC-SR04  ultrasonic  sensor   echo  signal  on  Comaparator(AC)
+    // HC-SR04 ultrasonic sensor echo signal on Analog Comaparator(AC)
     // positive pin AIN0,  3.3V on negative pin AIN1.   tFall and tLow
     // belong to ACO(Analog Comaparator Output) of the Input capture.
     
@@ -366,16 +366,13 @@ int main(void){
     // Connect Analog Comparator Output to Timer1 Input Capture.
     bitSet(ACSR, ACIC);
 
-    // configure TC1, Timer/Counter 2 for AC + IC of HC-SR04 echo signal                       
-    config_tc1();
+    // configure TC1, Timer/Counter 2 for AC + IC of HC-SR04 echo signal.                      
+    config_tc1(); // configure TC1, Timer/Counter 1
     config_tc2(); // configure TC2, Timer/Counter 2
 
     
     sei(); // Enable global interrupts
 
-    float tHigh_copy;
-    float tLow_copy;
-    float distance2object;
     
     while (1) {
 
@@ -383,70 +380,7 @@ int main(void){
         drive_servo();
         
 
-        // Debugging my_delay_us() to use in HC-SR04 trigger pulse
-        // bitClear(PORTC, pin_trigger);
-        // my_delay_us(10UL);
-        // bitSet(PORTC, pin_trigger);
-        // my_delay_us(10UL);
-        
-
-        // Trigger the sonar
-        bitClear(PORTC, pin_trigger);
-        //my_delay_us(2);
-        _delay_us(2);
-        bitSet(PORTC, pin_trigger);
-        //my_delay_us(11);
-        _delay_us(11);
-        bitClear(PORTC, pin_trigger);
-        
-        // We  disable interrupts  here as  we don't  want the  Timer1
-        // Input Capture ISR to change them while we are using them.
-        //
-        cli();
-        tHigh_copy = tHigh;
-        tLow_copy = tLow;
-        sei();
-
-        // Wait for falling edge capture, with a timeout
-        unsigned long timeout = 30000;
-        while (!echo_signal_high_detected && timeout > 0) {
-            //my_delay_us(1);
-            _delay_us(1);
-            timeout--;
-        }
-
-        if (echo_signal_high_detected){
-
-            // We  disable interrupts  here as  we don't  want the  Timer1
-            // Input Capture ISR to change them while we are using them.
-            //
-            cli();
-            tHigh_copy = tHigh;
-            tLow_copy = tLow;
-            echo_signal_high_detected = 0;
-            sei();
-            
-            distance2object = sonar(tHigh_copy);
-
-            // Debugging, send values to serial monitor
-            // usart_send_string("Echo Signal High=");
-            // usart_send_num((tHigh_copy*1000000), 8, 2);
-            // usart_send_string("us\n");
-
-            usart_send_string("Distance to object=");
-            usart_send_num((distance2object*100.0), 6, 3);
-            usart_send_string("cm\n");
-            _delay_ms(100);
-
-        }
-        else{
-            usart_send_string("No echo detected\n");
-        }
-        // Wait about 60 ms for hardware to reset before next sonar ping
-//        my_delay_us(60000UL);
-        _delay_us(60000UL);
-
-
+        sonar();
 
         
         
@@ -514,12 +448,11 @@ void drive_servo(void)
     static unsigned char moving_forward = 1;
     unsigned char angle_step = 5;
 
-    // Sweep the servo from 1ms pulse to 2ms pulse. Increment angle by
-    // 5 degrees every time, so  sonar measures a distance about every
-    // 5 degrees.
+    // Sweep the servo from 1ms pulse  to 2ms pulse, has been measured
+    // on the oscilloscope.  Increment angle by 5  degrees every time,
+    // so sonar measures a distance about every 5 degrees.
     
     // Work out the next angle for the next call to drive_servo().
-
     if (moving_forward){
         // We are sweeping from SERVO_MIN_ANGLE toward SERVO_MAX_ANGLE
         angle += angle_step;
@@ -556,6 +489,103 @@ void drive_servo(void)
 
     _delay_ms(100); // let the servo settle at it's new angle
 
+}
+
+
+float sonar(void){
+
+    // Measure HCR-S04  ultrasonic sensor's length of  the echo signal
+    // going  from  rising edge  to  falling  edge.  Using  this  then
+    // measure and display, in the serial monitor, the distance to the
+    // object.
+    
+    // Debugging my_delay_us() to use in HC-SR04 trigger pulse
+    // bitClear(PORTC, pin_trigger);
+    // my_delay_us(10UL);
+    // bitSet(PORTC, pin_trigger);
+    // my_delay_us(10UL);
+        
+
+    // Trigger the sonar
+    bitClear(PORTC, pin_trigger);
+    //my_delay_us(2);
+    _delay_us(2);
+    bitSet(PORTC, pin_trigger);
+    //my_delay_us(11);
+    _delay_us(11);
+    bitClear(PORTC, pin_trigger);
+        
+    // We  disable interrupts  here as  we don't  want the  Timer1
+    // Input Capture ISR to change them while we are using them.
+    //
+    // cli();
+    // tHigh_copy = tHigh;
+    // tLow_copy = tLow;
+    // sei();
+
+    // Wait for falling edge capture, with a timeout
+    unsigned long timeout = 30000;
+    while (!echo_signal_high_detected && timeout > 0) {
+        //my_delay_us(1);
+        _delay_us(1);
+        timeout--;
+    }
+
+    float tHigh_copy; // Echo signal high time from AC+TC.
+    float tLow_copy;  // Echo signal low time from AC+TC.
+    float distance_to_object;
+    float time_echo_signal_is_high;
+    // Velocity of sound about 343m/s at 25degreesC.
+    float velocity_of_sound = 343;
+
+    if (echo_signal_high_detected){
+
+        // We  disable interrupts  here as  we don't  want the  Timer1
+        // Input Capture ISR to change them while we are using them.
+        //
+        cli();
+        tHigh_copy = tHigh;
+        tLow_copy = tLow;
+        echo_signal_high_detected = 0;
+        sei();
+            
+
+
+        // Note: Velocity  = Distance/Time,  so,
+        // D = (time_echo_signal_is_high * velocity_of_sound/2).
+        // Where D is the distance_to_the_obstacle in m.
+
+        // Remember that the Distance value returned by the ultrasonic
+        // sensor is 2D,  the round trip distance  of the trigger/echo
+        // signals.
+        
+        // Which   implies   that time_echo_signal_is_high = 2D/V.
+        //
+        // The velocity of a sound wave is 346m/s@25degreesC.
+    
+        time_echo_signal_is_high = tHigh_copy;
+        distance_to_object = ((time_echo_signal_is_high * velocity_of_sound) / 2);
+    
+
+        // Debugging, send values to serial monitor
+        // usart_send_string("Echo Signal High=");
+        // usart_send_num((tHigh_copy*1000000), 8, 2);
+        // usart_send_string("us\n");
+
+        // Dispaly on serial monitor the distance2object in cm's
+        usart_send_string("Distance to object=");
+        usart_send_num((distance_to_object*100.0), 6, 3);
+        usart_send_string("cm\n");
+        _delay_ms(100);
+
+    }
+    else{
+        usart_send_string("No echo detected\n");
+    }
+
+    // Wait about 60 ms for hardware to reset before next sonar ping
+//        my_delay_us(60000UL);
+    _delay_us(60000UL);
 }
 
 
@@ -806,32 +836,4 @@ void usart_send_num(float num, char num_int, char num_decimal){
     str[num_int+num_decimal+1] = '\0';
     usart_send_string(str);
         
-}
-
-
-
-float sonar(float tHigh_copy){
-
-    float time_echo_signal_is_high;
-    float distance_to_object;
-    float velocity_of_sound = 343; // Velocity of sound about 343m/s
-                                   // at 25degreesC.
-
-    // Note: Velocity  = Distance/Time,  so,
-    // D = (time_echo_signal_is_high * velocity_of_sound/2).
-    // Where D is the distance_to_the_obstacle in m.
-
-    // Remember that the Distance value returned by the ultrasonic
-    // sensor is 2D,  the round trip distance  of the trigger/echo
-    // signals.
-        
-    // Which   implies   that time_echo_signal_is_high = 2D/V.
-    //
-    // The velocity of a sound wave is 346m/s@25degreesC.
-    
-    time_echo_signal_is_high = tHigh_copy;
-    distance_to_object = ((time_echo_signal_is_high * velocity_of_sound) / 2);
-    
-
-    return distance_to_object;
 }
