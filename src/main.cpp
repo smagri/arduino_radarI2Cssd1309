@@ -212,13 +212,15 @@ void config_tc1(void)
 {
 
     ///////////////////////////////////////////////////////////////////////////
-    //          TC1 is firstly used for AC and Input Capture.                //
+    //          TC1 is firstly used for AC and IC.                //
     ///////////////////////////////////////////////////////////////////////////
 
-    // The  Analog Comparator  output(AC0)  is connected  to the  TC1
-    // Input Capture unit by setting ACIC in ACSR in main().  See pg8
-    // and  pg17 of  leacture  notes for  diagrams  and dataheet  for
-    // setting ACSR.
+    // The Analog Comparator Output(AC0) is connected to the TC1 Input
+    // Capture unit  by setting ACIC in  ACSR in main().  See  pg8 and
+    // pg17 of  leacture notes for  diagrams and dataheet  for setting
+    // ACSR.  AIN0 is  connected to the echo signal  of the ultrasonic
+    // sensor with  a 3.3V referece  signal on AIN1.  So  AC0 measures
+    // the length of the echo signal.
         
 
     TCCR1A = 0;
@@ -255,27 +257,23 @@ void config_tc1(void)
     //                 Fast PWM TOP mode add-on for servo PWM                //
     ///////////////////////////////////////////////////////////////////////////
 
-    /*
-        We now add Fast PWM TOP mode to TC1.
+    // Switch from running TC1 in normal mode to Fast PWM TOP mode.
 
-        Important:
-        We use Fast PWM mode 15, where TOP = OCR1A.
+    
+        // We use Fast PWM mode 15, where TOP = OCR1A.
 
-        We do not use Fast PWM mode 14, where TOP = ICR1, because ICR1
-        is  already being  used  by  the Input  Capture  unit for  the
-        HC-SR04 echo timing.
-
-        Fast PWM mode 15:
-
-            WGM13:WGM12:WGM11:WGM10 = 1 1 1 1
-
-            TOP = OCR1A
-            PWM output = OC1B
-            Duty/pulse width = OCR1B
-
-        OC1B is on PB2, which is Arduino Uno digital pin 10.
-    */
-
+    //   We do not use Fast PWM mode 14, where TOP = ICR1, because ICR1
+    //   is  already being  used  by  the Input  Capture  unit for  the
+    //   HC-SR04 echo timing.
+    //
+    //   Fast PWM mode 15:
+    //       WGM13:WGM12:WGM11:WGM10 = 1 1 1 1
+    //       TOP = OCR1A
+    //       PWM output = OC1B
+    //       Duty/pulse width = OCR1B
+    //
+    //   OC1B is on PB2, which is Arduino Uno digital pin 10.
+    
 
     // Fast PWM mode 15: WGM13:0 = 1111, TOP = OCR1A.
     bitSet(TCCR1A, WGM10);
@@ -283,76 +281,62 @@ void config_tc1(void)
     bitSet(TCCR1B, WGM12);
     bitSet(TCCR1B, WGM13);
 
-    /*
-        Non-inverting PWM on OC1B.
-
-        COM1B1:COM1B0 = 1 0
-
-        This means:
-            OC1B goes HIGH at BOTTOM
-            OC1B goes LOW when TCNT1 == OCR1B
-
-        Therefore OCR1B controls the servo pulse width.
-    */
+   
+    // Non-inverting PWM on OC1B.
+    //
+    // COM1B1:COM1B0 = 1 0
+    //
+    // This means:
+    //     OC1B goes HIGH at BOTTOM
+    //     OC1B goes LOW when TCNT1 == OCR1B
+    //
+    // Therefore OCR1B controls the servo pulse width.
+   
     bitSet(TCCR1A, COM1B1);
     bitClear(TCCR1A, COM1B0);
 
 
     // Servo PWM period = 20ms  = 50Hz.  Thus the smallest prescaler=8
     // such that  TOP=OCR1A=40000 does not exceed  the 65535(max count
-    // for 16bit register).
+    // for TC1 16bit register).
     //
     // T = 1/F  = 1 / (F_CPU  / prescaler) = prescaler  / F_CPU.  Thus
     // one tick is 8 / 16 x 10^6 = 5us.
     //
     // TOP = OCR1A = 40000 - 1, as we count from 0.
-    
-    
     OCR1A = 39999;
 
-    /*
-        Initial servo pulse width.
-
-        With 0.5 us per Timer1 tick:
-
-            0.5 ms = 1000 ticks
-            1.5 ms = 3000 ticks
-            2.5 ms = 5000 ticks
-
-        OCR1B controls the pulse width on OC1B/PB2/D10.
-    */
+    // OCR1B controls the pulse width on OC1B/PB2/D10.
     OCR1B = 3000;   // Start servo near centre position.
 
-    /*
-        Your earlier code started Timer1 with prescaler = 1024:
 
-            TCCR1B |= 0b101;
+    // Earlier code started Timer1 with prescaler = 1024:
+    //
+    //     TCCR1B |= 0b101;
+    //
+    // For servo PWM, as detiled earlier we need prescaler = 8 instead:
+    //     CS12:CS11:CS10 = 0 1 0
 
-        For servo PWM, we need prescaler = 8 instead:
-
-            CS12:CS11:CS10 = 0 1 0
-
-        So first clear the old clock-select bits, then set CS11.
-        This does not clear ICNC1, ICES1, WGM13, or WGM12.
-    */
+    // So first clear the old clock-select bits, then set CS11.
+    // This does not clear ICNC1, ICES1, WGM13, or WGM12.
     TCCR1B &= 0b11111000;   // Clear CS12:CS11:CS10 only.
     bitSet(TCCR1B, CS11);   // Start TC1 with prescaler = 8.
 
-    /*
-        Update the timing variables used by your Input Capture ISR.
+    
+    // Update the timing variables used by the Input Capture ISR.
+    //
+    // In this Fast PWM TOP mode, Timer1 no longer overflows at 65536.
+    // It reaches OCR1A, then resets to 0.
 
-        In this Fast PWM TOP mode, Timer1 no longer overflows at 65536.
-        It reaches OCR1A, then resets to 0.
+    // Therefore:
+    //     Tov      = (OCR1A + 1) / timer_clock
+    //     Tclk_tc1 = 1 / timer_clock
+    
+    f = 16.0e6 / 8.0; // Frequency hardware will run at = F_CPU/prescaler
 
-        Therefore:
-
-            Tov      = (OCR1A + 1) / timer_clock
-            Tclk_tc1 = 1 / timer_clock
-    */
-    f = 16.0e6 / 8.0; // Frequency hardware will run at
-
+    // Toverflow = (Max Timer Ticks * Time for One tick).
     Tov = (OCR1A + 1) / f;  // 20 ms overflow/TOP period
-    Tclk_tc1 = 1.0 / f;     // 0.5 us Timer1 tick period in seconds.
+    Tclk_tc1 = 1.0 / f;     // 0.5 us Timer1 one tick period in seconds.
     
 }
 
@@ -379,7 +363,7 @@ int main(void){
     
     usart_init(9600);
 
-    // Connect Analog Comparator output to Timer1 Input Capture
+    // Connect Analog Comparator Output to Timer1 Input Capture.
     bitSet(ACSR, ACIC);
 
     // configure TC1, Timer/Counter 2 for AC + IC of HC-SR04 echo signal                       
