@@ -40,8 +40,8 @@
 
 
 //#define pin_oc2b    PC2  // for atmega328p
-#define pin_trigger PC2
-#define pin_echo PD6
+#define pin_trigger PC2     // Arduino Uno digital analog pin 2
+#define pin_echo PD6        // Arduino Uno digital pin 6
 #define pin_servo_pwm PB2   // OC1B = Arduino Uno digital pin 10
 
 // TC2 F = F_CPU/prescaler
@@ -49,6 +49,15 @@
 // So TC2 tick period = prescaler/F_CPU
 // Prescaler 8 gives good resolution for TC2 tick period as 8/16MHz = 0.5us
 #define prescalerTC2 8
+
+
+#define SERVO_MIN_PULSE_WIDTH 2000 // 1ms pulse measured on the oscilloscope.
+#define SERVO_MAX_PULSE_WIDTH 4000 // 2ms pulse measured on the oscilloscope.
+
+// Drive from a angle greater than 0deg and less than 180deg, so we
+// don't overdirve servo.
+#define SERVO_MIN_ANGLE 15  // degrees
+#define SERVO_MAX_ANGLE 165 // degrees
 
 /// / Total _time_ taken for the counter to count from 0->TOP-1 again.
 // // For the fast PWM TOP signal.
@@ -92,11 +101,12 @@ void usart_send_string(const char *ptr_to_str);
 void usart_send_num(float num, char num_int, char num_decimal);
 
 
-void my_delay_us(unsigned long x);
 void config_tc2(void);
 void config_tc1(void);
+void my_delay_us(unsigned long x);
 float sonar(float tHigh);
 void drive_servo(void);
+float linear_mapping(float x, float x1, float x2, float y1, float y2);
 
 
 
@@ -121,9 +131,9 @@ ISR(TIMER1_CAPT_vect)
 
     float tmp = numOV * Tov + icr1 * Tclk_tc1;
 
-    // HC-SR04 echo  signal on  Comaparator(AC) positive pin,  3.3V on
-    // negative pin  tFall and  tLow belong to  ACO(Analog Comaparator
-    // Output) of the Input capture.
+    // HC-SR04  ultrasonic  sensor   echo  signal  on  Comaparator(AC)
+    // positive pin AIN0,  3.3V on negative pin AIN1.   tFall and tLow
+    // belong to ACO(Analog Comaparator Output) of the Input capture.
     
     if (!bitCheck(TCCR1B, ICES1))
     {
@@ -200,15 +210,16 @@ void config_tc2(void)
 
 void config_tc1(void)
 {
-    /*
-        TC1 is used for AC and Input Capture.
 
-        The  Analog Comparator  output(AC0)  is connected  to the  TC1
-        Input Capture unit by setting ACIC in ACSR in main().  See pg8
-        and  pg17 of  leacture  notes for  diagrams  and dataheet  for
-        setting ACSR.
+    ///////////////////////////////////////////////////////////////////////////
+    //          TC1 is firstly used for AC and Input Capture.                //
+    ///////////////////////////////////////////////////////////////////////////
+
+    // The  Analog Comparator  output(AC0)  is connected  to the  TC1
+    // Input Capture unit by setting ACIC in ACSR in main().  See pg8
+    // and  pg17 of  leacture  notes for  diagrams  and dataheet  for
+    // setting ACSR.
         
-    */
 
     TCCR1A = 0;
     TCCR1B = 0;
@@ -240,7 +251,7 @@ void config_tc1(void)
     Tclk_tc1 = 1.0 / f;      // Timer1 tick period in seconds
 
 
-     ///////////////////////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////////////////////
     //                 Fast PWM TOP mode add-on for servo PWM                //
     ///////////////////////////////////////////////////////////////////////////
 
@@ -441,7 +452,7 @@ int main(void){
             usart_send_string("Distance to object=");
             usart_send_num((distance2object*100.0), 6, 3);
             usart_send_string("cm\n");
-            _delay_ms(1000UL);
+            _delay_ms(100);
 
         }
         else{
@@ -470,43 +481,103 @@ int main(void){
 void drive_servo(void)
 {
 
-    // Drive the  servo from 0  degrees to 180  degrees and back  to 0
-    // degrees.
+    // Drive the servo  all the way forward and back  again wrt angle,
+    // then repeat.
+
+    // T of tick, Ttick = 1/F = 1/(F_CPU/prescaler) = prescaler/F_CPU 
     
-    // With 0.5 us per Timer1 tick:
+    // With Ttick=0.5, period of one tick:
     //
-    //     0.5 ms ~= 1000 ticks
-    //     1.5 ms ~= 3000 ticks
-    //     2.5 ms ~= 5000 ticks
+    //  0.5 ms ~= 1000 ticks
+    //  1.0 mv ~= 2000    
+    //  1.5 ms ~= 3000 ticks
+    //  2.0 mv ~= 4000
+    //  2.5 ms ~= 5000 ticks
     //
     // OCR1B controls the pulse width on OC1B/PB2/D10.
+
+
     
-
+    // Debugging:
+    //
     // Sweep from 0 degrees to 180 degrees
-    for (unsigned int pulse_width_ticks=1000; pulse_width_ticks<=5500;
-         pulse_width_ticks+=50){
+    // for (unsigned int pulse_width_ticks=1000; pulse_width_ticks<=5000;
+    //      pulse_width_ticks+=200){
         
-        OCR1B = pulse_width_ticks;
-        _delay_ms(100); // let the servo settle
+    //     OCR1B = pulse_width_ticks;
+    //     _delay_ms(100); // let the servo settle
+    // }
+
+    // _delay_ms(1000);
+
+    // // Sweep from 180 degrees to 0 degrees
+    // for (unsigned int pulse_width_ticks=5000; pulse_width_ticks>=1000;
+    //      pulse_width_ticks-=200){
+
+    //     OCR1B = pulse_width_ticks;
+    //     _delay_ms(100);
+    // }
+    // _delay_ms(1000);
+
+    // Lower limit, 1ms pulse measured on the oscilloscope.
+    // OCR1B = 2000;
+    // Centre, 1.5ms puls
+    //OCR1B = 3000;
+    // Upper limit, 2ms pulse measured on the oscilloscope.
+    //OCR1B = 4000;
+
+    static unsigned char angle = SERVO_MIN_ANGLE;
+    static unsigned char moving_forward = 1;
+    unsigned char angle_step = 5;
+
+    // Sweep the servo from 1ms pulse to 2ms pulse. Increment angle by
+    // 5 degrees every time, so  sonar measures a distance about every
+    // 5 degrees.
+    
+    // Work out the next angle for the next call to drive_servo().
+
+    if (moving_forward){
+        // We are sweeping from SERVO_MIN_ANGLE toward SERVO_MAX_ANGLE
+        angle += angle_step;
+
+        // If we have reached the maximum angle, change direction
+        if (angle >= SERVO_MAX_ANGLE){
+            angle = SERVO_MAX_ANGLE;
+            moving_forward = 0;
+        }
     }
+    else{
+        // We are sweeping from SERVO_MAX_ANGLE back toward SERVO_MIN_ANGLE
+        angle -= angle_step;
 
-    _delay_ms(1000);
-
-    // Sweep from 180 degrees to 0 degrees
-    for (unsigned int pulse_width_ticks=5500; pulse_width_ticks>=1000;
-         pulse_width_ticks-=50){
-
-        OCR1B = pulse_width_ticks;
-        _delay_ms(100);
+        // If we have reached the minimum angle, change direction
+        if (angle <= SERVO_MIN_ANGLE){
+            angle = SERVO_MIN_ANGLE;
+            moving_forward = 1;
+        }
     }
-    _delay_ms(1000);
+    
+    // Linearly map sevo angle to pulse with ranges.
+    OCR1B = (uint16_t)linear_mapping(angle, SERVO_MIN_ANGLE , SERVO_MAX_ANGLE,
+                                     SERVO_MIN_PULSE_WIDTH,
+                                     SERVO_MAX_PULSE_WIDTH);
+
+    
+    // usart_send_string("OCR1B=");
+    // usart_send_num(OCR1B, 4, 2);
+    // usart_send_byte('\n');
+    // usart_send_string("angle=");
+    // usart_send_num(angle, 4, 2);
+    // usart_send_byte('\n');
+
+    _delay_ms(100); // let the servo settle at it's new angle
+
 }
 
 
 
-
-void my_delay_us(unsigned long x)
-{
+void my_delay_us(unsigned long x){
+    
     // Delay x us
     
     // Remember we are trying to  avoid floating point calculations as
@@ -559,6 +630,47 @@ void my_delay_us(unsigned long x)
         // wait
     }
 }
+
+
+
+float linear_mapping(float x, float x1, float x2, float y1, float y2){
+
+    // Linear mapping equation: slope = (y2 -y1)/(x2-x1)
+    //
+    // We have y vs x 
+    //
+    // The slope is essentialy the gradient of the straight line, also
+    // known as  the rate of change.   The rate of change  in a linear
+    // equation is constant.  So when  we use linear mapping, we apply
+    // a  constant rate  of change  between  the input  range and  the
+    // output range.
+
+    // To get greater y more quickly you need to increase the slope by
+    // increasion y2.  
+
+    // By swapping y1 and y2 the slope becomes -ve(as y2>y1) so we get
+    // a swapped around effect, or -ve linear mapping.
+
+
+    // Clamp input so it stays in  sensor range.
+    //
+    // 1. Clamp the input to the lower bound
+    if (x <= x1) return y1;
+    
+    // 2. Clamp the input to the upper bound
+    if (x >= x2) return y2;
+
+    
+    // Note: You lose precision with integer division because integers
+    // cannot store  fractional parts. When two  integers are divided,
+    // the result is truncated (the decimal part is discarded).
+    
+    // 3. Perform Linear Interpolation (Lerp)
+    // Formula: y = y1 + (x - x1) * (slope)
+    // where slope = (y2 - y1) / (x2 - x1)
+    return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
+}
+
 
 
 void usart_init(float baud_rate){
