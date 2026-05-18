@@ -61,11 +61,11 @@
 
 /// / Total _time_ taken for the counter to count from 0->TOP-1 again.
 // // For the fast PWM TOP signal.
-// float timer2_overflow_time_us;
+float timer2_overflow_time_us;
 
 // // T=1/F, the perioud of each clock tick.  Where is F/prescaler.
 // //float clock_tc0;
-// float period_of_tick;
+float period_of_tick_tc2;
 
 // // Kai's original code, causes my_delay_us() to hang as num_timer2_overflow overflows:
 // //volatile unsigned int num_timer2_overflow = 0;
@@ -73,6 +73,7 @@
 // //
 // Avoids counter overflow in my_delay_us() for 1s delay.
 volatile uint32_t  num_timer2_compare_matches = 0;
+volatile uint32_t  num_timer2_overflows = 0;
 
 volatile float tLow = 0;
 volatile float tHigh = 0;
@@ -113,7 +114,8 @@ float linear_mapping(float x, float x1, float x2, float y1, float y2);
 // Timer2 overflow, which is really compare match A overflows in CTC mode.
 ISR(TIMER2_COMPA_vect)
 {
-    num_timer2_compare_matches++;
+    num_timer2_overflows++;
+    //num_timer2_compare_matches++;
 }
 
 
@@ -200,6 +202,19 @@ void config_tc2(void)
     // Clear pending compare-match A flag
     TIFR2 = (1 << OCF2A);
 
+    period_of_tick_tc2 = 1.0f/(float)(F_CPU/prescalerTC2);
+    
+    // timer2_overflow_time_us=(total_number_of_ticks * period_of_tick) * 1.0e6
+    //
+    // In our fast PWM TOP mode the timer/counter counts as such:
+    //
+    // 0 -> 1 -> 2 -> ... -> TOP -> 0 -> 1 -> ...,
+    //
+    // Note that the the reset to 0 is part of the cycle, resulting in
+    // TOP+1 transitions for the period.
+    //
+    timer2_overflow_time_us = ((float)OCR2A + 1.0f) * period_of_tick_tc2 * 1.0e6;
+     
     // Disable compare-match interrupt initially
     disable_tc2_interrupt;
 
@@ -511,17 +526,10 @@ float sonar(void){
     //my_delay_us(2);
     _delay_us(2);
     bitSet(PORTC, pin_trigger);
-    //my_delay_us(11);
-    _delay_us(11);
+    my_delay_us(11);
+    //_delay_us(11);
     bitClear(PORTC, pin_trigger);
         
-    // We  disable interrupts  here as  we don't  want the  Timer1
-    // Input Capture ISR to change them while we are using them.
-    //
-    // cli();
-    // tHigh_copy = tHigh;
-    // tLow_copy = tLow;
-    // sei();
 
     // Wait for falling edge capture, with a timeout
     unsigned long timeout = 30000;
@@ -589,60 +597,290 @@ float sonar(void){
 }
 
 
+// This very general version.
+//
+// void my_delay_us(unsigned long x)
+// {
+//     // Maximum delay is 1.19 hours.
+//     //
+//     // The practical maximum is unsigned long x, 32-bit on atmega328p.
+//     //
+//     // x_max=2^32-1=4,294,967,295us=4,294.967295s=71.5828minutes=1.19 hours
+//     //
+//     // However, on the atmega328p unsigned long long = uint_64t is the
+//     // largest integer you can use.
+//     //
+//     // But on the ATmega328P, bigger does not mean better. The chip is
+//     // an 8-bit microcontroller,  so 32-bit and 64-bit  maths are done
+//     // using multiple instructions in software.
+//     //
+//     // For timing code:
+//     //
+//     // uint8_t   // fastest
+//     // uint16_t  // still fairly good
+//     // uint32_t  // slower
+//     // uint64_t  // much slower
+//     //
+//     // We use  uint64_t total_ticks; // only used where overflow could happen
 
-void my_delay_us(unsigned long x){
     
-    // Delay x us
+//     /*
+//         General Timer2 CTC delay.
+
+//         Assumes Timer2 has already been configured in CTC mode:
+
+//             WGM22:0 = 010
+//             TOP = OCR2A
+
+//         With your current config_tc2():
+
+//             F_CPU        = 16000000 Hz
+//             prescalerTC2 = 8
+//             OCR2A        = 255
+
+//         Timer2 clock = F_CPU / prescalerTC2
+//                      = 16000000 / 8
+//                      = 2000000 Hz
+
+//         Timer2 tick period = 1 / 2000000
+//                            = 0.5 us
+
+//         So for your current setup:
+
+//             1 us  = 2 ticks
+//             10 us = 20 ticks
+//             11 us = 22 ticks
+//     */
+
+//     uint64_t total_ticks;
+//     uint32_t num_complete_ctc_periods;
+//     uint8_t remainder_ticks;
+//     uint16_t ticks_per_ctc_period;
+
+//     /*
+//         Convert delay time in us to Timer2 ticks.
+
+//         Formula:
+
+//             total_ticks = delay_us / tick_time_us
+
+//         Since:
+
+//             tick_time = prescaler / F_CPU
+
+//         Then:
+
+//             total_ticks = delay_us * F_CPU / prescaler
+
+//         But because delay_us is in microseconds:
+
+//             total_ticks =
+//                 delay_us * F_CPU / (prescaler * 1000000)
+
+//         The + divisor - 1 part rounds up, so the delay is not too short.
+//     */
+
+//     total_ticks =
+//         (
+//             ((uint64_t)x * (uint64_t)F_CPU) +
+//             (((uint64_t)prescalerTC2 * 1000000ULL) - 1)
+//         )
+//         /
+//         ((uint64_t)prescalerTC2 * 1000000ULL);
+
+//     /*
+//         In CTC mode with TOP = OCR2A, Timer2 counts:
+
+//             0, 1, 2, ..., OCR2A, 0, 1, 2, ...
+
+//         Therefore one full CTC period contains:
+
+//             OCR2A + 1 ticks
+
+//         With OCR2A = 255:
+
+//             ticks_per_ctc_period = 256
+//     */
+
+//     ticks_per_ctc_period = (uint16_t)OCR2A + 1;
+
+//     num_complete_ctc_periods =
+//         (uint32_t)(total_ticks / ticks_per_ctc_period);
+
+//     remainder_ticks =
+//         (uint8_t)(total_ticks % ticks_per_ctc_period);
+
+//     /*
+//         This delay function polls the compare-match flag directly,
+//         so disable the Timer2 compare interrupt while using it.
+
+//         That means this function does not rely on:
+
+//             ISR(TIMER2_COMPA_vect)
+//     */
+
+//     disable_tc2_interrupt;
+
+//     /*
+//         Delay for complete CTC periods.
+
+//         In CTC mode, OCF2A is set when TCNT2 matches OCR2A.
+//         We clear it by writing a 1 to OCF2A.
+//     */
+
+//     if (num_complete_ctc_periods > 0)
+//     {
+//         TCNT2 = 0;
+
+//         // Clear pending compare-match flag before starting.
+//         TIFR2 = (1 << OCF2A);
+
+//         while (num_complete_ctc_periods > 0)
+//         {
+//             // Wait until Timer2 reaches OCR2A.
+//             while (!bitCheck(TIFR2, OCF2A))
+//             {
+//                 // wait
+//             }
+
+//             // Clear compare-match flag.
+//             TIFR2 = (1 << OCF2A);
+
+//             num_complete_ctc_periods--;
+//         }
+//     }
+
+//     /*
+//         Delay for the remaining ticks.
+
+//         Example with your current settings:
+
+//             my_delay_us(11)
+
+//             total_ticks = 22
+//             num_complete_ctc_periods = 22 / 256 = 0
+//             remainder_ticks = 22
+
+//         Then this waits until TCNT2 reaches 22.
+//     */
+
+//     if (remainder_ticks > 0)
+//     {
+//         TCNT2 = 0;
+
+//         while (TCNT2 < remainder_ticks)
+//         {
+//             // wait
+//         }
+//     }
+// }
+
+
+// I get a good 11ms pulse but can't give it more than 286us
+//
+// void my_delay_us(unsigned long x){
     
-    // Remember we are trying to  avoid floating point calculations as
-    // these are very slow on the atmega328p.
+//     // Delay x us
 
-    unsigned long total_ticks;
-    unsigned long num_complete_ctc_periods;
-    unsigned char remainder_ticks;
+//     // This  version uses  unsigned  longs so  the  maximum delay  is:
+//     // unsigned  long  max=4,294,967,295, the  multiplication  happens
+//     // first so with F_CPU ~=268us
+    
+//     // Remember we are trying to  avoid floating point calculations as
+//     // these are very slow on the atmega328p.
+
+//     unsigned long total_ticks;
+//     unsigned long num_complete_ctc_periods;
+//     unsigned char remainder_ticks;
 
     
-    // total_ticks = x / period_of_one_tick_in_us
-    //
-    // period_of_one_tick = 1 / F
-    // F = F_CPU / prescaler
-    // period_of_one_tick = 1 / (F_CPU / prescaler)
-    // period_of_one_tick = prescaler / F_CPU
-    //
-    // period_of_one_tick_us = (prescaler / F_CPU) * 1000000UL
-    // period_of_one_tick_us = (prescaler * 1000000UL) / F_CPU
-    //
-    // total_ticks = x / ((prescaler * 1000000UL) / F_CPU)
-    // total_ticks = x * F_CPU / (prescalerTC2 * 1000000UL);
-    // == total_ticks = x * (F_CPU / prescalerTC2 / 1000000UL);
+//     // total_ticks = x / period_of_one_tick_in_us
+//     //
+//     // period_of_one_tick = 1 / F
+//     // F = F_CPU / prescaler
+//     // period_of_one_tick = 1 / (F_CPU / prescaler)
+//     // period_of_one_tick = prescaler / F_CPU
+//     //
+//     // period_of_one_tick_us = (prescaler / F_CPU) * 1000000UL
+//     // period_of_one_tick_us = (prescaler * 1000000UL) / F_CPU
+//     //
+//     // total_ticks = x / ((prescaler * 1000000UL) / F_CPU)
+//     // total_ticks = x * F_CPU / (prescalerTC2 * 1000000UL);
+//     // == total_ticks = x * (F_CPU / prescalerTC2 / 1000000UL);
 
-    total_ticks = x * F_CPU / (prescalerTC2 * 1000000UL);
+//     total_ticks = x * F_CPU / (prescalerTC2 * 1000000UL);
         
 
-    // Remember  that TC2  is an  8 bit  Timer/Counter so  its maximum
-    // count is 256 values.
-    num_complete_ctc_periods = total_ticks / 256UL;
-    remainder_ticks = total_ticks % 256UL;
+//     // Remember  that TC2  is an  8 bit  Timer/Counter so  its maximum
+//     // count is 256 values.
+//     num_complete_ctc_periods = total_ticks / 256UL;
+//     remainder_ticks = total_ticks % 256UL;
 
-    // Delay for complete number of of Timer2 compare matches.
-    if (num_complete_ctc_periods > 0){
-        num_timer2_compare_matches = 0;
+//     // Delay for complete number of of Timer2 compare matches.
+//     if (num_complete_ctc_periods > 0){
+//         num_timer2_compare_matches = 0;
+//         TCNT2 = 0;
+//         TIFR2 = (1 << OCF2A);
+
+//         enable_tc2_interrupt;
+//         while (num_timer2_compare_matches < num_complete_ctc_periods)
+//         {
+//             // wait
+//         }
+//         disable_tc2_interrupt;
+//     }
+
+//     // Delay for the remainder number of Timer2 ticks
+//     TCNT2 = 0;
+//     while (TCNT2 < remainder_ticks){
+//         // wait
+//     }
+// }
+
+
+// Original routine following Kai's demo codes.  Due to floating point
+// calculations it is not good for long delays.
+//
+void my_delay_us(unsigned long x){
+
+    // Delays, determined with a hardware timer/counter for x us.
+
+    // This  version  of  my_delay_us()  is limited  by  the  size  of
+    // unsigned long. Hence x_max=2^32-1=4,294,967,295 us=4,294.967295
+    // s=71.5828 minutes=1.193hours
+    
+    
+    // NOTE: that a float assigned  to an integer returns the interger
+    // value with no decimal pont values.
+        
+    // Number of complete Timer2 overflow periods needed.
+    unsigned long num_complete_overflows = ( (float)x / timer2_overflow_time_us );
+
+    // Remaining time after complete overflows, in microseconds.
+    float remainder_time_us =
+        (  (float)x - ((float)num_complete_overflows*timer2_overflow_time_us) );
+
+    // Convert remaining time into Timer2 ticks.
+    unsigned char remainder_time_ticks =
+        ( remainder_time_us / (period_of_tick_tc2 * 1.0e6) );
+
+    //  Delay for complete number of overflows of Timer2
+    if (num_complete_overflows > 0){
+        num_timer2_overflows = 0;
         TCNT2 = 0;
-        TIFR2 = (1 << OCF2A);
+
+        // // TODO: Test  Clears  and pending  overflow flag  so the  ISR doen't  run
+        // immediately and have the delay overflow too short.
+        //TIFR2 = (1 << TOV2);
 
         enable_tc2_interrupt;
-        while (num_timer2_compare_matches < num_complete_ctc_periods)
-        {
-            // wait
-        }
+        while (num_timer2_overflows < num_complete_overflows);
         disable_tc2_interrupt;
     }
 
-    // Delay for the remainder number of Timer2 ticks
+    // Delay for remainder number of ticks
     TCNT2 = 0;
-    while (TCNT2 < remainder_ticks){
-        // wait
-    }
+    while (TCNT2 < remainder_time_ticks);
 }
 
 
