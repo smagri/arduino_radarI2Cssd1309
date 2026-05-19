@@ -44,6 +44,9 @@
 #define pin_echo PD6        // Arduino Uno digital pin 6
 #define pin_servo_pwm PB2   // OC1B = Arduino Uno digital pin 10
 
+// External Interrupt INT1, to trigger project start
+#define pin_int1_interrupt PD3
+
 // TC2 F = F_CPU/prescaler
 // TC2 tick_period = 1/F
 // So TC2 tick period = prescaler/F_CPU
@@ -52,8 +55,8 @@
 
 
 #define SERVO_MIN_PULSE_WIDTH 2000 // 1ms pulse measured on the oscilloscope.
-//#define SERVO_MAX_PULSE_WIDTH 4000 // 2ms pulse measured on the oscilloscope.
-#define SERVO_MAX_PULSE_WIDTH 3500 // 2ms pulse measured on the oscilloscope.
+#define SERVO_MAX_PULSE_WIDTH 4000 // 2ms pulse measured on the oscilloscope.
+//#define SERVO_MAX_PULSE_WIDTH 3500 // 2ms pulse measured on the oscilloscope.
 
 // Drive from a angle greater than 0deg and less than 180deg, so we
 // don't overdirve servo.
@@ -91,9 +94,11 @@ volatile float Tclk_tc1;
 volatile uint16_t numOV = 0;
 uint16_t icr1;
 
+volatile unsigned char flag_system_start = 0;
+
+
 // Setup State Types
 typedef enum{
-    INIT_MODE,
     IDLE_MODE,
     SERVO_MODE,
     SONAR_MODE
@@ -117,11 +122,29 @@ void usart_send_num(float num, char num_int, char num_decimal);
 
 void config_tc2(void);
 void config_tc1(void);
+void interrupt_init(void);
 void my_delay_us(unsigned long x);
-float sonar();
+void sonar(void);
 void drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
 
+
+ISR(INT1_vect){
+
+    // System External interrupt INT1 triggered  when a push button is
+    // pressed that is connected to a pin on the atmega328p MCU.  This
+    // will put the state machine  into INIT_MODE where all the system
+    // configurations  occur.   INT1 ISR  has  been  configured to  be
+    // triggerd on  falling edge, ie high  to low, when the  button is
+    // pressed.
+    
+     // crude debouncing // TODO: implement proper debounceing code.
+    _delay_ms(10);
+    if (!bitRead(PIND, pin_int1_interrupt))
+        flag_system_start = 1;
+
+    //usart_send_string("\ndbg: INT1_vect(): in ISR\n");
+}
 
 
 // Timer2 overflow, which is really compare match A overflows in CTC mode.
@@ -373,51 +396,99 @@ void config_tc1(void)
 int main(void){
 
 
-    state_current = INIT_MODE;
+    // Configure Sonar Pins
+    bitSet(DDRC, pin_trigger);    // HC-SR04 trigger pin as output
+    bitClear(PORTC, pin_trigger); // HC-SR04 trigger pin set to low
+    bitClear(DDRD, pin_echo);     // HC-SR04 echo as input
+    bitClear(PORTD, pin_echo);    // Disable internal pull-up resistor
+    //bitSet(PORTD, pin_echo);    // Disable internal pull-up resistor
+
+    // Analog Comparator input pins
+    // PD6 = AIN0 = positive input, echo sinal of HC-SR04
+    // PD7 = AIN1 = negative input, 3.3V
+    bitClear(DDRD, PD6);
+    bitClear(DDRD, PD7);
+
+    // Servo PWM pin OC1B/PB2/D10 as output.
+    bitSet(DDRB, pin_servo_pwm);
+    
+    // Enable pin for INT1 as an input.  Then enable the pullup
+    // resistor which sets the port pin HIGH.
+    bitClear(DDRD, pin_int1_interrupt);
+    bitSet(PORTD, pin_int1_interrupt);
+
+
+    // Connect Analog Comparator Output to Timer1 Input Capture.
+    bitSet(ACSR, ACIC);
+
+    usart_init(9600);
+
+    // Configure  TC1,  Timer/Counter 2  for  AC  + IC  of
+    // HC-SR04 echo signal.  And Fast PWM Mode for driving
+    // the servo
+    //
+    config_tc1(); // configure TC1, Timer/Counter 1
+
+    // Configure TC2  as a simple  counter in CTC  mode to
+    // generating the  11us trigger pulse for  the HCR-S04
+    // ultrasonic sensor.
+    //
+    config_tc2(); // configure TC2, Timer/Counter 2
+
+    // Configure  the external  interrupts INT1  and INT2.
+    // When  INTI is  pressed the  control system  starts,
+    // when INI0 is pressed the system stops.
+    //
+    interrupt_init();
+                
+    sei(); // Enable global interrupts
+
+    usart_send_string("dbg: in INIT_FINISHED\n");
+
+
+    state_current = IDLE_MODE;
     
     while (1){
 
-        switch (state_current){
+
+        // Setup  state  machine  mode  transitions.   Which  mode  is
+        // triggered by  push buttons initiating ISR  which change the
+        // state.
+        if (flag_system_start){
+
+            // usart_send_string("\ndbg: flag_system_start\n");
+            // usart_send_num(flag_system_start, 1, 0);
+            // usart_send_string("\n");
             
-            case INIT_MODE: {
-                // Configure Sonar Pins
-                bitSet(DDRC, pin_trigger);    // HC-SR04 trigger pin as output
-                bitClear(PORTC, pin_trigger); // HC-SR04 trigger pin set to low
-                bitClear(DDRD, pin_echo);     // HC-SR04 echo as input
-                bitClear(PORTD, pin_echo);    // Disable internal pull-up resistor
-                //bitSet(PORTD, pin_echo);    // Disable internal pull-up resistor
+            flag_system_start = 0;
+            
+            state_current = SERVO_MODE;
+        }
 
-                // Analog Comparator input pins
-                // PD6 = AIN0 = positive input, echo sinal of HC-SR04
-                // PD7 = AIN1 = negative input, 3.3V
-                bitClear(DDRD, PD6);
-                bitClear(DDRD, PD7);
 
-                // Servo PWM pin OC1B/PB2/D10 as output.
-                bitSet(DDRB, pin_servo_pwm);
-    
-    
-                usart_init(9600);
+        switch (state_current){
 
-                // Connect Analog Comparator Output to Timer1 Input Capture.
-                bitSet(ACSR, ACIC);
 
-                // configure TC1, Timer/Counter 2 for AC + IC of HC-SR04 echo signal.                      
-                config_tc1(); // configure TC1, Timer/Counter 1
-                config_tc2(); // configure TC2, Timer/Counter 2
+            case IDLE_MODE: {
 
-    
-                sei(); // Enable global interrupts
+                usart_send_string("dbg: in IDLE_MODE\n");
+                _delay_ms(1000);
 
-                state_current = SERVO_MODE;
                 break;
             }
             case SERVO_MODE: {
+
+                //usart_send_string("dbg: in SERVO_MODE\n");
+
                 drive_servo();
                 state_current = SONAR_MODE;
+
                 break;
             }
             case SONAR_MODE: {
+
+                //usart_send_string("dbg: in SONAR_MODE\n");
+
                 sonar();
                 state_current = SERVO_MODE;
                 break;
@@ -487,6 +558,8 @@ void drive_servo(void)
     // Upper limit, 2ms pulse measured on the oscilloscope.
     //OCR1B = 4000;
 
+    //usart_send_string("dbg: in drive_servo()\n");
+    
     static unsigned char angle = SERVO_MIN_ANGLE;
     static unsigned char moving_forward = 1;
     unsigned char angle_step = 5;
@@ -535,7 +608,7 @@ void drive_servo(void)
 }
 
 
-float sonar(void){
+void sonar(void){
 
     // Measure HCR-S04  ultrasonic sensor's length of  the echo signal
     // going  from  rising edge  to  falling  edge.  Using  this  then
@@ -547,7 +620,8 @@ float sonar(void){
     // my_delay_us(10UL);
     // bitSet(PORTC, pin_trigger);
     // my_delay_us(10UL);
-        
+
+    //usart_send_string("dbg: in sonar()\n");
 
     // Trigger the sonar
     bitClear(PORTC, pin_trigger);
@@ -578,7 +652,7 @@ float sonar(void){
 
         // We  disable interrupts  here as  we don't  want the  Timer1
         // Input Capture ISR to change them while we are using them.
-        //
+        // //
         cli();
         tHigh_copy = tHigh;
         tLow_copy = tLow;
@@ -612,7 +686,7 @@ float sonar(void){
         usart_send_string("Distance to object=");
         usart_send_num((distance_to_object*100.0), 6, 3);
         usart_send_string("cm\n");
-        _delay_ms(100);
+        //_delay_ms(100);
 
     }
     else{
@@ -846,12 +920,12 @@ void my_delay_us(unsigned long x){
 
     // Delay for complete number of of Timer2 compare matches.
     if (num_complete_ctc_periods > 0){
-        num_timer2_compare_matches = 0;
+        num_timer2_overflows = 0;
         TCNT2 = 0;
         TIFR2 = (1 << OCF2A);
 
         enable_tc2_interrupt;
-        while (num_timer2_compare_matches < num_complete_ctc_periods)
+        while (num_timer2_overflows < num_complete_ctc_periods)
         {
             // wait
         }
@@ -949,6 +1023,40 @@ float linear_mapping(float x, float x1, float x2, float y1, float y2){
     // Formula: y = y1 + (x - x1) * (slope)
     // where slope = (y2 - y1) / (x2 - x1)
     return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
+}
+
+
+
+void interrupt_init(void){
+
+    // INIT1 external interrupt configuration:
+    //
+    // Clear INT1 sense bits first
+    EICRA &= ~((1 << ISC11) | (1 << ISC10));
+
+    // Triggered on Rising edge on INT1
+    //EICRA |= (1 << ISC11) | (1 << ISC10);
+    
+    // INT1 ISR triggerd on falling edge, ie high to low, when the
+    // button is pressed.
+    EICRA |= (1 << ISC11);
+
+    // Clear any pending INT1 flag
+    EIFR |= (1 << INTF1);
+
+    // Enable external interrupt INT1
+    EIMSK |= (1 << INT1);
+
+
+    // Port C's PCINT10  MCU pin used so enable  PCIE1_vect pin change
+    // interrupt.   Remember there  is only  one pin  change interrupt
+    // allowed per port  on the atmega328p MCU.  Also  it will trigger
+    // on the falling high->low and  rising low->high of a push button
+    // press.
+    //
+    // PCICR |= (1 << PCIE1); // Set Pin Change Inerrupt Control Register.
+
+    // PCMSK1 |= (1 << PCINT10); //Set Pin Change Mask Register 1
 }
 
 
