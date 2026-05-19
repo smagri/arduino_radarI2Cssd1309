@@ -55,6 +55,8 @@
 // Prescaler 8 gives good resolution for TC2 tick period as 8/16MHz = 0.5us
 #define prescalerTC2 8
 
+// RX recive buffer size for debugging
+#define BUFFER_SIZE 50
 
 #define SERVO_MIN_PULSE_WIDTH 2000 // 1ms pulse measured on the oscilloscope.
 #define SERVO_MAX_PULSE_WIDTH 4000 // 2ms pulse measured on the oscilloscope.
@@ -100,6 +102,25 @@ volatile unsigned char flag_system_start = 0;
 volatile bool flag_system_stop = 0;
 
 
+// Our program buffer  that stores TX/RX data for the  Arduino that we
+// want to transmit from MCU->PC or recive data from the PC->MCU.
+//
+// all elements of usart_buffer are initially assgined to 0.
+char usart_buffer[BUFFER_SIZE] = {0};
+char *ptr_to_usart_buffer = usart_buffer;
+
+// Flags for respective  main state machine modes  to print debugging,
+// or  not, data  as it  is calculated.   Input is  taken from  the PC
+// serial  monitor and  recived by  the MCU  via an  interrupt service
+// routine, hence this is a non-blocking uart RX buffer read.
+bool usart_debugging_mode_object_distance = 0;
+bool usart_debugging_mode_angle = 0;
+
+// Set to volatile as can be changed in the ISR.  Indicates the RX
+// xfer of string from PC to MCU is complete or not.
+volatile bool flag_rx_done = 0; // Initialised to not complete.
+
+
 // Setup State Types
 typedef enum{
     IDLE_MODE,
@@ -121,7 +142,8 @@ void usart_read_string(char *ptr_to_str);
 void usart_send_byte(unsigned char data);
 void usart_send_string(const char *ptr_to_str);
 void usart_send_num(float num, char num_int, char num_decimal);
-
+void print_usart_debugging_mode_menu(void);
+void set_user_required_usart_debugging_mode(int8_t user_choice);
 
 void config_tc2(void);
 void config_tc1(void);
@@ -130,6 +152,38 @@ void my_delay_us(unsigned long x);
 void sonar(void);
 void drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
+
+
+
+ISR(USART_RX_vect){
+
+    // We have recived the interrupt indicating the RX buffer contains
+    // data.  Remember first we need to enable the interrupt for, data
+    // in RX  buffer, with the  RXCIE0 flag  in UCSR0B.
+
+    // We have used  this routine for the system to  set its debugging
+    // state by the user sending values to the USART.  That is setting
+    // the showing of ADC/LED brightness  values as a duty cycle value
+    // and for ultrasonic sensor/sonar distance measurments.
+    
+    char tmp = UDR0;
+
+    //usart_send_string("\ndbg: USART_RX_vect(): in ISR\n");
+
+    if (flag_rx_done == 0){
+        // If we  have reached the end  of string sent from  the PC to
+        // the MCU. Terminate the string as per C standard.  Otherwise
+        // put the UDRO RX data into our usart_buffer.
+        if ( (tmp == '\r') || (tmp == '\n') ){
+            *ptr_to_usart_buffer = '\0';
+            flag_rx_done = 1; // xfer from PC to MCU complete
+        }
+        else{
+            *ptr_to_usart_buffer++ = tmp;
+        }
+    }
+    
+}
 
 
 
@@ -146,7 +200,7 @@ ISR(INT0_vect){
     if (!bitRead(PIND, pin_int0_interrupt))
         flag_system_stop = 1;
 
-    usart_send_string("\ndbg: INT0_vect(): in ISR\n");
+    //usart_send_string("\ndbg: INT0_vect(): in ISR\n");
 }
 
 
@@ -164,7 +218,7 @@ ISR(INT1_vect){
     if (!bitRead(PIND, pin_int1_interrupt))
         flag_system_start = 1;
 
-    usart_send_string("\ndbg: INT1_vect(): in ISR\n");
+    //usart_send_string("\ndbg: INT1_vect(): in ISR\n");
 }
 
 
@@ -469,14 +523,18 @@ int main(void){
                 
     sei(); // Enable global interrupts
 
-    usart_send_string("dbg: in INIT_FINISHED\n");
+    //usart_send_string("dbg: in INIT_FINISHED\n");
 
-
+    usart_flush();
+    print_usart_debugging_mode_menu();
+    
     state_current = IDLE_MODE;
+
     
     while (1){
 
-
+        usart_debugging();
+        
         // Setup  state  machine  mode  transitions.
         if (flag_system_start){
 
@@ -507,7 +565,7 @@ int main(void){
 
             case IDLE_MODE: {
 
-                usart_send_string("dbg: in IDLE_MODE\n");
+                //usart_send_string("dbg: in IDLE_MODE\n");
                 _delay_ms(1000);
 
                 break;
@@ -546,6 +604,113 @@ int main(void){
 ///////////////////////////////////////////////////////////////////////////////
 //                           User defined functions                          //
 ///////////////////////////////////////////////////////////////////////////////
+
+// Debugging USART functions //////////////////////////////////////////////////
+void usart_debugging(void){
+
+    // Sets mode of debugging according to request from user PC serial
+    // monitor.  Option for no debugging  also exists.  It can also be
+    // used with vscode Teleplot.
+    //
+    // PC byte to MCU input reading  is into the USART RX register and
+    // is non-blocking as it is under USART_RX ISR control.
+    
+    uint8_t user_choice; // User choice for debugging mode.
+    
+    // Nothing to do if we haven't recived an input from the PC serial
+    // monitor yet, via the USART_RX interrupt service routine.
+    if (!flag_rx_done)
+        return;
+
+    // Xfer from  PC to MCU is  complete and via ISR.   We can
+    // now process that data.
+        
+    // Check if it's  exactly one digit 1–3 by  checking the ASCII
+    // numbers.  Also,  reject non single character  entries, such
+    // decimals and outside range ascii characters.
+    if ( (usart_buffer[0]<'0')
+         || (usart_buffer[0]>'3')
+         || (usart_buffer[1]!='\0') ){
+        usart_send_string("Invalid selection. Try again\n");
+
+        // Ignore this  byte and get  ready for the  next byte
+        // from the RX buffer.
+    }
+    else{
+        // Convert input string into an integer.
+        //
+        // note: atoi() expects a null - terminated string.
+        user_choice = atoi(usart_buffer);
+        // usart_send_string("dbg: main(): User_choice is: ");
+        // usart_send_num(user_choice, 1, 0);
+        // usart_send_byte('\n'); // send EOL, CRLF
+        // Set debugging mode flags.
+        set_user_required_usart_debugging_mode(user_choice);
+    }
+    
+        
+    // Get the next byte from the RX buffer.
+    ptr_to_usart_buffer = usart_buffer;
+    flag_rx_done = 0;
+    usart_flush();
+        
+    print_usart_debugging_mode_menu();
+
+    return;
+}
+
+
+void print_usart_debugging_mode_menu(void){
+
+    // Output the menu for debugging operations.
+    usart_send_byte('\n');
+    usart_send_string("\nEnter a number for usart debugging required:\n");
+    usart_send_string("0. Switch off debugging mode, no data from MCU to PC.\n");
+    usart_send_string("1. Send sonar object distance measurments to PC.\n");
+    usart_send_string("2. Send sonar angle to PC.\n");
+    usart_send_string("3. Both data in mode 1 and 2 sent to PC.\n");
+}
+
+
+void set_user_required_usart_debugging_mode(int8_t user_choice){
+
+    // Set program state for debugging operations.
+
+    switch (user_choice) {
+        case 0: {
+            usart_send_string("\nDebugging mode has been turned off.\n");
+            usart_debugging_mode_object_distance = 0;
+            usart_debugging_mode_angle = 0;
+            break;
+        }
+        case 1: {
+            usart_send_string("\nSending sonar object distance measurments");
+            usart_send_string(" to PC via Serial Monitor\n");
+            usart_debugging_mode_object_distance = 1;
+            break;
+        }
+        case 2: {
+            usart_send_string("\nSending sonar angle measurements");
+            usart_send_string(" to PC via Serial Monitor\n");
+            usart_debugging_mode_angle = 1;
+            usart_debugging_mode_object_distance = 0;
+            break;
+        }
+        case 3: {
+            usart_send_string("\nSending both data measurements from mode 1 and 2");
+            usart_send_string(" to PC via Serial Monitor\n");
+            usart_debugging_mode_object_distance = 1;
+            usart_debugging_mode_angle = 1;
+            break;
+        }   
+        default:
+            break;
+    }
+
+}
+
+
+
 void drive_servo(void)
 {
 
@@ -625,8 +790,14 @@ void drive_servo(void)
             moving_forward = 1;
         }
     }
+
+    if (usart_debugging_mode_angle){
+     usart_send_string("Current Angle:");
+     usart_send_num(angle, 5, 2);
+        usart_send_string("\n");
+    }
     
-    // Linearly map sevo angle to pulse with ranges.
+        // Linearly map sevo angle to pulse with ranges.
     OCR1B = (uint16_t)linear_mapping(angle, SERVO_MIN_ANGLE , SERVO_MAX_ANGLE,
                                      SERVO_MIN_PULSE_WIDTH,
                                      SERVO_MAX_PULSE_WIDTH);
@@ -718,15 +889,22 @@ void sonar(void){
         // usart_send_num((tHigh_copy*1000000), 8, 2);
         // usart_send_string("us\n");
 
-        // Dispaly on serial monitor the distance2object in cm's
-        usart_send_string("Distance to object=");
-        usart_send_num((distance_to_object*100.0), 6, 3);
-        usart_send_string("cm\n");
+
+        // Print debugging info to serial monitor
+        if (usart_debugging_mode_object_distance){
+            
+            usart_send_string("Distance to Object:");
+            usart_send_num((distance_to_object*100.0), 6, 3);
+            usart_send_string("cm\n");
+            
         //_delay_ms(100);
+        }
 
     }
     else{
-        usart_send_string("No echo detected\n");
+        if (usart_debugging_mode_object_distance){
+            usart_send_string("No echo detected\n");
+        }
     }
 
     // Wait about 60 ms for hardware to reset before next sonar ping
@@ -1102,7 +1280,6 @@ void interrupt_init(void){
 
     // INT1 ISR triggerd on falling edge, ie high(pullup configured)
     // to low, when the button is pressed.
-
     // ISC01 = 1, ISC00 = 0
     EICRA |= (1 << ISC01);
 
