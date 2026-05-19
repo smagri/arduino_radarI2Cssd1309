@@ -44,8 +44,10 @@
 #define pin_echo PD6        // Arduino Uno digital pin 6
 #define pin_servo_pwm PB2   // OC1B = Arduino Uno digital pin 10
 
-// External Interrupt INT1, to trigger project start
+// External Interrupt INT1 , to trigger system start
 #define pin_int1_interrupt PD3
+// External Interrupt INT1 , to trigger system stop
+#define pin_int0_interrupt PD2
 
 // TC2 F = F_CPU/prescaler
 // TC2 tick_period = 1/F
@@ -95,6 +97,7 @@ volatile uint16_t numOV = 0;
 uint16_t icr1;
 
 volatile unsigned char flag_system_start = 0;
+volatile bool flag_system_stop = 0;
 
 
 // Setup State Types
@@ -129,21 +132,39 @@ void drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
 
 
+
+ISR(INT0_vect){
+
+    // System External interrupt INT0 triggered  when a push button is
+    // pressed that is connected to a pin on the atmega328p MCU.  This
+    // will  put the  state  machine into  IDLE_MODE disabling  system
+    // operation.   INT1 ISR  has been  configured to  be triggerd  on
+    // falling edge, ie high to low, when the button is pressed.
+    
+     // crude debouncing // TODO: implement proper debounceing code.
+    _delay_ms(10);
+    if (!bitRead(PIND, pin_int0_interrupt))
+        flag_system_stop = 1;
+
+    usart_send_string("\ndbg: INT0_vect(): in ISR\n");
+}
+
+
+
 ISR(INT1_vect){
 
     // System External interrupt INT1 triggered  when a push button is
     // pressed that is connected to a pin on the atmega328p MCU.  This
-    // will put the state machine  into INIT_MODE where all the system
-    // configurations  occur.   INT1 ISR  has  been  configured to  be
-    // triggerd on  falling edge, ie high  to low, when the  button is
-    // pressed.
+    // will  put the  state machine  into action.   INT1 ISR  has been
+    // configured to be triggerd on falling edge, ie high to low, when
+    // the button is pressed.
     
      // crude debouncing // TODO: implement proper debounceing code.
     _delay_ms(10);
     if (!bitRead(PIND, pin_int1_interrupt))
         flag_system_start = 1;
 
-    //usart_send_string("\ndbg: INT1_vect(): in ISR\n");
+    usart_send_string("\ndbg: INT1_vect(): in ISR\n");
 }
 
 
@@ -417,6 +438,11 @@ int main(void){
     bitClear(DDRD, pin_int1_interrupt);
     bitSet(PORTD, pin_int1_interrupt);
 
+    // Enable pin for INT0 as an input.  Then enable the pullup
+    // resistor which sets the port pin HIGH.
+    bitClear(DDRD, pin_int0_interrupt);
+    bitSet(PORTD, pin_int0_interrupt);
+
 
     // Connect Analog Comparator Output to Timer1 Input Capture.
     bitSet(ACSR, ACIC);
@@ -451,9 +477,7 @@ int main(void){
     while (1){
 
 
-        // Setup  state  machine  mode  transitions.   Which  mode  is
-        // triggered by  push buttons initiating ISR  which change the
-        // state.
+        // Setup  state  machine  mode  transitions.
         if (flag_system_start){
 
             // usart_send_string("\ndbg: flag_system_start\n");
@@ -466,6 +490,18 @@ int main(void){
         }
 
 
+        if (flag_system_stop){
+
+            // usart_send_string("\ndbg: flag_system_start\n");
+            // usart_send_num(flag_system_start, 1, 0);
+            // usart_send_string("\n");
+            
+            flag_system_stop = 0;
+            
+            state_current = IDLE_MODE;
+        }
+
+        
         switch (state_current){
 
 
@@ -1037,8 +1073,8 @@ void interrupt_init(void){
     // Triggered on Rising edge on INT1
     //EICRA |= (1 << ISC11) | (1 << ISC10);
     
-    // INT1 ISR triggerd on falling edge, ie high to low, when the
-    // button is pressed.
+    // INT1 ISR triggerd on falling edge, ie high(pullup configured)
+    // to low, when the button is pressed.
     EICRA |= (1 << ISC11);
 
     // Clear any pending INT1 flag
@@ -1057,6 +1093,26 @@ void interrupt_init(void){
     // PCICR |= (1 << PCIE1); // Set Pin Change Inerrupt Control Register.
 
     // PCMSK1 |= (1 << PCINT10); //Set Pin Change Mask Register 1
+
+    
+    // INIT1 external interrupt configuration:
+    //
+    // Clear INT0 sense control bits first
+    EICRA &= ~((1 << ISC01) | (1 << ISC00));
+
+    // INT1 ISR triggerd on falling edge, ie high(pullup configured)
+    // to low, when the button is pressed.
+
+    // ISC01 = 1, ISC00 = 0
+    EICRA |= (1 << ISC01);
+
+    // Clear any pending INT0 interrupt flag
+    EIFR |= (1 << INTF0);
+
+    // Enable external interrupt INT0
+    EIMSK |= (1 << INT0);
+
+
 }
 
 
