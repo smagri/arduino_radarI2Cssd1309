@@ -42,7 +42,8 @@
 //#define pin_oc2b    PC2  // for atmega328p
 #define pin_trigger PC2     // Arduino Uno digital analog pin 2
 #define pin_echo PD6        // Arduino Uno digital pin 6
-#define pin_servo_pwm PB2   // OC1B = Arduino Uno digital pin 10
+#define pin_servo_pwm PB2   // OC1B, Arduino Uno digital pin 10
+#define pin_led_pwm PD5     // OC0B, Arduino Uno digital pin 5
 
 // External Interrupt INT1 , to trigger system start
 #define pin_int1_interrupt PD3
@@ -54,13 +55,15 @@
 // So TC2 tick period = prescaler/F_CPU
 // Prescaler 8 gives good resolution for TC2 tick period as 8/16MHz = 0.5us
 #define prescalerTC2 8
+#define prescalerTC0 8
+
 
 // RX recive buffer size for debugging
 #define BUFFER_SIZE 50
 
 #define SERVO_MIN_PULSE_WIDTH 2000 // 1ms pulse measured on the oscilloscope.
 #define SERVO_MAX_PULSE_WIDTH 4000 // 2ms pulse measured on the oscilloscope.
-//#define SERVO_MAX_PULSE_WIDTH 3500 // 2ms pulse measured on the oscilloscope.
+
 
 // Drive from a angle greater than 0deg and less than 180deg, so we
 // don't overdirve servo.
@@ -147,11 +150,14 @@ void set_user_required_usart_debugging_mode(int8_t user_choice);
 
 void config_tc2(void);
 void config_tc1(void);
+void config_tc0(void);
 void interrupt_init(void);
 void my_delay_us(unsigned long x);
 void sonar(void);
 void drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
+void led_pwm_on(void);
+void led_pwm_off(void);
 
 
 
@@ -468,6 +474,61 @@ void config_tc1(void)
 
 
 
+void config_tc0(void){
+
+    // In our phase correct PWM TOP mode we need to * 2 as the counter
+    // overflows after it counts from BOTTOM to TOP and back downwards
+    // to BOTTOM again, that is:
+    //
+    // 0 -> 1 -> 2 -> ... -> TOP -> ... -> 2 -> 1 ->  0
+    
+
+    // Timer0 Phase Correct PWM, TOP = OCR0A  (Mode 5)
+    //
+    // Set waveform generation mode: WGM02:0 = 101
+    //
+    // We want PWM output on OC0B in non-inverting mode. OCR0A will be
+    // used for myTOP,  or period of PWM frequency and  OCROB for duty
+    // cycle.
+    //
+    // We  also   require  clear  OC0B   on  compare  match   when  up
+    // counting. Set OCOB on compare match when counting down.
+    //
+    // Prescaler need to be set to a value for required Fpwm such that
+    // TOP   doesn't    exceed   its   range.     Prescaler=64.    See
+    // notes:26/4/2026 pg2.
+    //
+    // Also, setting the  clock select bits, ie  setting the prescaler
+    // means the timers are started  here.
+    
+    TCCR0A = (1 << COM0B1) | (1 << WGM00);
+    //TCCR0B = (1 << WGM02);
+    TCCR0B = (1 << WGM02) | (1 << CS00) | (1 << CS01);
+
+
+    // Setting TOP  for phase  correct PWM  TOP Mode  of TC0.   From a
+    // positive linear mapping  of last three digits of  my student id
+    // card to TOP value range.
+    //
+    // TCO is an 8 bit counter so it's range is from 0-255
+    //
+
+    // OCROA  is  proportional  to  the Period/Frequency  of  the  PWM
+    // signal(see equation for  Fpwm signal) The larger  the TOP value
+    // is it means  the timer takes longer to complete  one PWM cycle,
+    // so  the frequency  is lower.   Conversly, the  smaller the  TOP
+    // means the timer  completes one PWM faster, so  the frequency is
+    // higher.
+    //
+    OCR0A = 255; // Maximum for this 8 bit register
+
+     // This sets the Duty Cycle of the PWM signal on OCOB/PD5, always on.
+    OCR0B = 255;
+
+}
+
+
+
 int main(void){
 
 
@@ -497,12 +558,18 @@ int main(void){
     bitClear(DDRD, pin_int0_interrupt);
     bitSet(PORTD, pin_int0_interrupt);
 
-
+    bitSet(DDRD, pin_led_pwm);    // LED pin configure as an output
+    bitClear(PORTD, pin_led_pwm); // LED off to start off with
+    
     // Connect Analog Comparator Output to Timer1 Input Capture.
     bitSet(ACSR, ACIC);
 
     usart_init(9600);
 
+    // Config TC0 in Phase Correct PWM for LED
+    config_tc0();
+    led_pwm_off(); // Turn LED off initially
+    
     // Configure  TC1,  Timer/Counter 2  for  AC  + IC  of
     // HC-SR04 echo signal.  And Fast PWM Mode for driving
     // the servo
@@ -534,6 +601,7 @@ int main(void){
     while (1){
 
         usart_debugging();
+
         
         // Setup  state  machine  mode  transitions.
         if (flag_system_start){
@@ -543,6 +611,8 @@ int main(void){
             // usart_send_string("\n");
             
             flag_system_start = 0;
+
+            led_pwm_on();
             
             state_current = SERVO_MODE;
         }
@@ -555,6 +625,8 @@ int main(void){
             // usart_send_string("\n");
             
             flag_system_stop = 0;
+
+            led_pwm_off();
             
             state_current = IDLE_MODE;
         }
@@ -604,6 +676,26 @@ int main(void){
 ///////////////////////////////////////////////////////////////////////////////
 //                           User defined functions                          //
 ///////////////////////////////////////////////////////////////////////////////
+
+void led_pwm_on(void){
+
+    // Connect OC0B/PD5 to Timer0 PWM output
+    bitSet(TCCR0A, COM0B1);
+    bitClear(TCCR0A, COM0B0);
+}
+
+
+void led_pwm_off(void)
+{
+    // Disconnect OC0B/PD5 from Timer0 PWM hardware
+    bitClear(TCCR0A, COM0B1);
+    bitClear(TCCR0A, COM0B0);
+
+    // Now PORTD controls PD5 again, so force LED off
+    bitClear(PORTD, pin_led_pwm);
+}
+
+
 
 // Debugging USART functions //////////////////////////////////////////////////
 void usart_debugging(void){
