@@ -71,6 +71,14 @@
 //#define SERVO_MAX_ANGLE 165 // degrees
 #define SERVO_MAX_ANGLE 165 // degrees
 
+#define ADC_MIN 0
+#define ADC_MAX 1023
+
+#define OLED_CONTRAST_MIN 0
+#define OLED_CONTRAST_MAX 255
+
+
+
 /// / Total _time_ taken for the counter to count from 0->TOP-1 again.
 // // For the fast PWM TOP signal.
 float timer2_overflow_time_us;
@@ -104,6 +112,8 @@ uint16_t icr1;
 volatile unsigned char flag_system_start = 0;
 volatile bool flag_system_stop = 0;
 
+// Current ADC value read in ADC_vect ISR.
+volatile uint16_t adc_cur = 0;
 
 // Our program buffer  that stores TX/RX data for the  Arduino that we
 // want to transmit from MCU->PC or recive data from the PC->MCU.
@@ -158,6 +168,20 @@ void drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
 void led_pwm_on(void);
 void led_pwm_off(void);
+void adc_init(void);
+uint8_t get_adc_to_oled_contrast(uint16_t adc_raw);
+
+
+ISR(ADC_vect){
+
+    // System ADC  value reading ISR  routine.  These ADC  values from
+    // will be linearly  mapped to OLED screen contrast.
+    
+    //usart_send_string("dbg: in ISR\n");
+    
+    // Triggers when interrupt conversion is complete.
+    adc_cur = ADC; // Read ADC data register.
+}
 
 
 
@@ -168,9 +192,7 @@ ISR(USART_RX_vect){
     // in RX  buffer, with the  RXCIE0 flag  in UCSR0B.
 
     // We have used  this routine for the system to  set its debugging
-    // state by the user sending values to the USART.  That is setting
-    // the showing of ADC/LED brightness  values as a duty cycle value
-    // and for ultrasonic sensor/sonar distance measurments.
+    // state by the user sending values to the USART.
     
     char tmp = UDR0;
 
@@ -564,6 +586,12 @@ int main(void){
     // Connect Analog Comparator Output to Timer1 Input Capture.
     bitSet(ACSR, ACIC);
 
+    // Potentiometer ADC input pin: ADC0 = A0 = PC0
+    bitClear(DDRC, PC0);     // A0/PC0 as input
+    bitClear(PORTC, PC0);    // no internal pull-up
+    
+
+
     usart_init(9600);
 
     // Config TC0 in Phase Correct PWM for LED
@@ -587,9 +615,22 @@ int main(void){
     // when INI0 is pressed the system stops.
     //
     interrupt_init();
+
+    // Initialise the ADC0 register mapped to OLED contrast.
+    adc_init();
                 
     sei(); // Enable global interrupts
 
+    // ADSC sets  the ADC to  start conversions.  Setting this  bit is
+    // the  "software trigger"  that  tells the  hardware to  actually
+    // begin the  electrical process  of sampling  the voltage  on the
+    // pin.   As soon  as  the conversion  is  finished, the  hardware
+    // automatically  clears  it  to  0.   This  is  known  as  single
+    // conversion mode  as the  conversion occurs  only once  for each
+    // time ADSC is set.
+    bitSet(ADCSRA, ADSC);
+    _delay_ms(10);
+    
     //usart_send_string("dbg: in INIT_FINISHED\n");
 
     usart_flush();
@@ -601,6 +642,25 @@ int main(void){
     while (1){
 
         usart_debugging();
+
+        uint16_t adc_raw;
+        uint8_t oled_contrast;
+
+        // So ISR  does not corrupt  the current adc value  we disable
+        // interrupts while accessing the ISR set adc value.
+        cli();
+        adc_raw = adc_cur;
+        sei();
+
+        oled_contrast =  get_adc_to_oled_contrast(adc_raw);
+        
+        // usart_send_string(">adc_raw:");
+        // usart_send_num(adc_raw, 4, 0);
+        // usart_send_string("\n"); 
+
+        // usart_send_string(">oled_contrast:");
+        // usart_send_num(oled_contrast, 3, 0);
+        // usart_send_string("\n");
 
         
         // Setup  state  machine  mode  transitions.
@@ -676,6 +736,26 @@ int main(void){
 ///////////////////////////////////////////////////////////////////////////////
 //                           User defined functions                          //
 ///////////////////////////////////////////////////////////////////////////////
+   
+uint8_t get_adc_to_oled_contrast(uint16_t adc_raw){
+
+    // Single conversion mode is active, so conversion only occurs
+    // once  everytime ADSC  is  set.  Get  the  current value  of
+    // the ADC via ISR 
+    bitSet(ADCSRA, ADSC);
+
+
+    // Linear Mapping of current ADC reading to OLED contrast.
+    uint8_t oled_contrast = linear_mapping(adc_raw, ADC_MIN, ADC_MAX,
+                                      OLED_CONTRAST_MIN, OLED_CONTRAST_MAX);
+
+    if (oled_contrast < 0) oled_contrast = 0;
+    if (oled_contrast > 255) oled_contrast = 255;
+
+        
+    return oled_contrast; // contrast value for ssd1306 is from 0->255
+}
+
 
 void led_pwm_on(void){
 
@@ -1329,6 +1409,57 @@ float linear_mapping(float x, float x1, float x2, float y1, float y2){
     // Formula: y = y1 + (x - x1) * (slope)
     // where slope = (y2 - y1) / (x2 - x1)
     return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
+}
+
+
+
+void adc_init(void){
+
+    // ADMUX = ADC Multiplexer Selection Register
+    //
+    ADMUX = 0;              // Clear all bits first (good practice)
+    bitSet(ADMUX, REFS0);   // REFS0 = 1 => Vref = AVcc (5V)
+
+    // By default ADC is used:
+    // MUX3..0 = 0000 => Select ADC0, which is A0 / PC0
+    // No MUX bits need to be set for ADC0
+    //bitSet(ADMUX, MUX0);    // MUX0 = 1 => Select ADC1 (A1/PC1) as input channel
+
+
+    // DIDR0 = Digital Input Disable Register
+    //
+    // ADC0D = 1, Disable digital input buffer on ADC0 pin
+    //
+    // We do this to reduce power consumption; electrical noise on the
+    // analog pin; and improves ADC accuracy.
+    bitSet(DIDR0, ADC0D);
+
+
+    // ADCSRA = ADC Control and Status Register A
+    //
+    ADCSRA = 0;   // Clear register first
+
+    // We need to decrease the CPU clock for the ADC hardware to work
+    // properly.  We use a prescaler to do this.  Prescaler set to
+    // 128.
+    
+    // ADC clock = 16  MHz / 128 = 125 kHz.   The recommended range of
+    // ADC  operation  is  50-200Hz,   to  give  stable  and  accurate
+    // readings.
+    bitSet(ADCSRA, ADPS2);
+    bitSet(ADCSRA, ADPS1);
+    bitSet(ADCSRA, ADPS0);
+
+
+    // ADIE = ADC Interrupt Enable.
+    //
+    // When   conversion  is   complete  the   ISR(ADC_vect)  executes
+    // automatically.  It allows non-blocking ADC reading.
+    bitSet(ADCSRA, ADIE);
+
+    
+    // ADEN = ADC Enable
+    bitSet(ADCSRA, ADEN);
 }
 
 
