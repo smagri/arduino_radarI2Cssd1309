@@ -2,7 +2,13 @@
 #define F_CPU 16000000UL
 #endif // Set system clock frequency
 
-
+// Arduino libraries for ssd1306 OLED display, allowed to use as it
+// was not covered in the course.
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <math.h>
 
 #include <avr/io.h>
 #include <util/delay.h>
@@ -78,6 +84,34 @@
 #define OLED_CONTRAST_MAX 255
 
 
+// ------------------------------------------------------------
+// SSD1306 setup
+// ------------------------------------------------------------
+
+#define SCREEN_WIDTH   128
+#define SCREEN_HEIGHT  64
+#define OLED_RESET     -1
+#define SCREEN_ADDRESS 0x3C
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ------------------------------------------------------------
+// Radar display settings
+// ------------------------------------------------------------
+
+// Radar origin is at the bottom-centre of the OLED
+#define RADAR_ORIGIN_X 64
+#define RADAR_ORIGIN_Y 63
+
+// Leave some space at the top for angle/distance text
+#define RADAR_RADIUS_PIXELS 48
+
+// Maximum displayed radar distance
+//#define RADAR_MAX_DISTANCE_CM 100.0f
+#define RADAR_MAX_DISTANCE_CM 200.0f
+
+#define PI_FLOAT 3.14159265f
+
 
 /// / Total _time_ taken for the counter to count from 0->TOP-1 again.
 // // For the fast PWM TOP signal.
@@ -128,12 +162,14 @@ char *ptr_to_usart_buffer = usart_buffer;
 // routine, hence this is a non-blocking uart RX buffer read.
 bool usart_debugging_mode_object_distance = 0;
 bool usart_debugging_mode_angle = 0;
-bool usart_debugging_mode_adc = 0;
 
 // Set to volatile as can be changed in the ISR.  Indicates the RX
 // xfer of string from PC to MCU is complete or not.
 volatile bool flag_rx_done = 0; // Initialised to not complete.
 
+// radar/ultrasonic sensor current angle
+float cur_radar_angle;
+float cur_radar_distance_to_object;
 
 // Setup State Types
 typedef enum{
@@ -158,21 +194,23 @@ void usart_send_string(const char *ptr_to_str);
 void usart_send_num(float num, char num_int, char num_decimal);
 void print_usart_debugging_mode_menu(void);
 void set_user_required_usart_debugging_mode(int8_t user_choice);
-void usart_clear_print(void);
-    
+
 void config_tc2(void);
 void config_tc1(void);
 void config_tc0(void);
 void interrupt_init(void);
 void my_delay_us(unsigned long x);
-void sonar(void);
-void drive_servo(void);
+float sonar(void);
+float drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
 void led_pwm_on(void);
 void led_pwm_off(void);
 void adc_init(void);
+void oled_init(void);
 uint8_t get_adc_to_oled_contrast(uint16_t adc_raw);
-
+void radar_display_update(float cur_radar_angle,
+                          float cur_radar_distance_to_object,
+                          bool);
 
 ISR(ADC_vect){
 
@@ -500,9 +538,6 @@ void config_tc1(void)
 
 void config_tc0(void){
 
-    // Drive LED continuously with Phase Correct PWM TOP Mode.
-    
-
     // In our phase correct PWM TOP mode we need to * 2 as the counter
     // overflows after it counts from BOTTOM to TOP and back downwards
     // to BOTTOM again, that is:
@@ -533,8 +568,9 @@ void config_tc0(void){
     TCCR0B = (1 << WGM02) | (1 << CS00) | (1 << CS01);
 
 
-    // Setting TOP for phase correct PWM TOP Mode of TC0 to drive the
-    // LED.
+    // Setting TOP  for phase  correct PWM  TOP Mode  of TC0.   From a
+    // positive linear mapping  of last three digits of  my student id
+    // card to TOP value range.
     //
     // TCO is an 8 bit counter so it's range is from 0-255
     //
@@ -548,8 +584,8 @@ void config_tc0(void){
     //
     OCR0A = 255; // Maximum for this 8 bit register
 
-    // This sets the Duty Cycle of the PWM signal on OCOB/PD5, to 90%.
-    OCR0B = 229;
+     // This sets the Duty Cycle of the PWM signal on OCOB/PD5, always on.
+    OCR0B = 255;
 
 }
 
@@ -557,6 +593,8 @@ void config_tc0(void){
 
 int main(void){
 
+    //init();   // Required when using Arduino core libraries from custom main()
+    
 
     // Configure Sonar Pins
     bitSet(DDRC, pin_trigger);    // HC-SR04 trigger pin as output
@@ -598,7 +636,6 @@ int main(void){
 
     usart_init(9600);
 
-
     // Config TC0 in Phase Correct PWM for LED
     config_tc0();
     led_pwm_off(); // Turn LED off initially
@@ -609,6 +646,35 @@ int main(void){
     //
     config_tc1(); // configure TC1, Timer/Counter 1
 
+    // Servo moved so the TC1 servo PWM is working, the wiring is
+    // corret and config_tc1() is basically correct.
+    
+    // OCR1B = 2500;   // centre pulse, about 1.5 ms
+    // _delay_ms(2000);
+    
+    // OCR1B = 3000;   // one side, about 1.0 ms
+    // _delay_ms(2000);
+    
+    // OCR1B = 3500;   // other side, about 2.0 ms
+    // _delay_ms(2000);
+
+        
+    // while (1)
+    // {
+    //     OCR1B = 2500;   // safer than extreme
+    //     _delay_ms(1000);
+        
+    //     OCR1B = 3000;   // centre
+    //     _delay_ms(1000);
+        
+    //     OCR1B = 3500;   // safer than extreme
+    //     _delay_ms(1000);
+    // }
+    // while (1)
+    // {
+    //     drive_servo();
+    // }
+    
     // Configure TC2  as a simple  counter in CTC  mode to
     // generating the  11us trigger pulse for  the HCR-S04
     // ultrasonic sensor.
@@ -623,8 +689,28 @@ int main(void){
 
     // Initialise the ADC0 register mapped to OLED contrast.
     adc_init();
-                
+
     sei(); // Enable global interrupts
+        
+    usart_send_string("before oled_init()");
+    oled_init();
+    usart_send_string("after oled_init()");
+
+
+
+        // Your state machine here
+        usart_send_string("in test ");
+        // Example test text
+        display.clearDisplay();
+
+        display.setTextSize(1);
+        display.setTextColor(SSD1306_WHITE);
+        display.setCursor(0, 0);
+        display.print(F("OLED working"));
+
+        display.display();
+        usart_send_string("end test");
+
 
     // ADSC sets  the ADC to  start conversions.  Setting this  bit is
     // the  "software trigger"  that  tells the  hardware to  actually
@@ -638,17 +724,15 @@ int main(void){
     
     //usart_send_string("dbg: in INIT_FINISHED\n");
 
-    //usart_clear_print();
-    usart_send_string("REBOOT!!!\n");
     usart_flush();
-    print_usart_debugging_mode_menu();
+//    print_usart_debugging_mode_menu();
     
     state_current = IDLE_MODE;
-
+    
 
     while (1){
-
-        usart_debugging();
+        
+        //      usart_debugging();
 
         uint16_t adc_raw;
         uint8_t oled_contrast;
@@ -660,23 +744,22 @@ int main(void){
         sei();
 
         oled_contrast =  get_adc_to_oled_contrast(adc_raw);
+        
+        // usart_send_string(">adc_raw:");
+        // usart_send_num(adc_raw, 4, 0);
+        // usart_send_string("\n"); 
 
-        if (usart_debugging_mode_adc){
-            usart_send_string(">adc_raw:");
-            usart_send_num(adc_raw, 4, 0);
-            usart_send_string("\n"); 
+        // usart_send_string(">oled_contrast:");
+        // usart_send_num(oled_contrast, 3, 0);
+        // usart_send_string("\n");
 
-            usart_send_string(">oled_contrast:");
-            usart_send_num(oled_contrast, 3, 0);
-            usart_send_string("\n");
-        }
         
         // Setup  state  machine  mode  transitions.
         if (flag_system_start){
 
-            // usart_send_string("\ndbg: flag_system_start\n");
-            // usart_send_num(flag_system_start, 1, 0);
-            // usart_send_string("\n");
+            usart_send_string("\ndbg: flag_system_start\n");
+            usart_send_num(flag_system_start, 1, 0);
+            usart_send_string("\n");
             
             flag_system_start = 0;
 
@@ -714,23 +797,37 @@ int main(void){
 
                 //usart_send_string("dbg: in SERVO_MODE\n");
 
-                drive_servo();
+                cur_radar_angle = drive_servo();
                 state_current = SONAR_MODE;
 
                 break;
             }
             case SONAR_MODE: {
+                _delay_ms(60);
 
                 //usart_send_string("dbg: in SONAR_MODE\n");
 
-                sonar();
+                cur_radar_distance_to_object = sonar();
                 state_current = SERVO_MODE;
                 break;
             }
             default:
+
                 break;
         }
-        
+
+        //radar_display_update(cur_radar_angle, cur_radar_distance_to_object,
+        //                       true);
+        _delay_ms(100);
+        display.clearDisplay();
+
+        display.setTextSize(1);
+        display.setTextColor(SSD1306_WHITE);
+        display.setCursor(0, 0);
+        display.print(F("OLED loop working"));
+
+        display.display();
+
         
     } // end: while(1)
 
@@ -744,7 +841,237 @@ int main(void){
 ///////////////////////////////////////////////////////////////////////////////
 //                           User defined functions                          //
 ///////////////////////////////////////////////////////////////////////////////
-   
+
+///////////////////////////////////////////////////////////////////////////////
+//                        OLED radar display functions                       //
+///////////////////////////////////////////////////////////////////////////////
+
+// ------------------------------------------------------------
+// Helper: clamp a float value
+// ------------------------------------------------------------
+
+float clamp_float(float value, float minimum, float maximum)
+{
+    if (value < minimum)
+    {
+        return minimum;
+    }
+
+    if (value > maximum)
+    {
+        return maximum;
+    }
+
+    return value;
+}
+
+// ------------------------------------------------------------
+// Convert angle + pixel radius into OLED x/y position
+//
+// Angle convention:
+//     0 degrees   = right side
+//     90 degrees  = straight up
+//     180 degrees = left side
+// ------------------------------------------------------------
+
+void radar_point_from_radius(float angle_deg, float radius_pixels, int *x, int *y)
+{
+    float angle_rad = angle_deg * PI_FLOAT / 180.0f;
+
+    *x = RADAR_ORIGIN_X + (int)(radius_pixels * cos(angle_rad));
+    *y = RADAR_ORIGIN_Y - (int)(radius_pixels * sin(angle_rad));
+}
+
+// ------------------------------------------------------------
+// Convert angle + distance in cm into OLED x/y position
+// ------------------------------------------------------------
+
+void radar_point_from_distance(float angle_deg, float distance_cm, int *x, int *y)
+{
+    distance_cm = clamp_float(distance_cm, 0.0f, RADAR_MAX_DISTANCE_CM);
+
+    float radius_pixels =
+        (distance_cm / RADAR_MAX_DISTANCE_CM) * RADAR_RADIUS_PIXELS;
+
+    radar_point_from_radius(angle_deg, radius_pixels, x, y);
+}
+
+// ------------------------------------------------------------
+// Draw one semi-circle arc for the radar grid
+// ------------------------------------------------------------
+
+void draw_radar_arc(int radius_pixels)
+{
+    for (int angle = 0; angle <= 180; angle += 2)
+    {
+        int x;
+        int y;
+
+        radar_point_from_radius(angle, radius_pixels, &x, &y);
+
+        display.drawPixel(x, y, SSD1306_WHITE);
+    }
+}
+
+// ------------------------------------------------------------
+// Draw the fixed radar grid
+// ------------------------------------------------------------
+
+void draw_radar_grid(void)
+{
+    // Baseline
+    display.drawFastHLine(
+        RADAR_ORIGIN_X - RADAR_RADIUS_PIXELS,
+        RADAR_ORIGIN_Y,
+        RADAR_RADIUS_PIXELS * 2,
+        SSD1306_WHITE
+    );
+
+    // Distance arcs
+    draw_radar_arc(RADAR_RADIUS_PIXELS / 3);
+    draw_radar_arc((RADAR_RADIUS_PIXELS * 2) / 3);
+    draw_radar_arc(RADAR_RADIUS_PIXELS);
+
+    // Angle lines every 30 degrees
+    for (int angle = 0; angle <= 180; angle += 30)
+    {
+        int x;
+        int y;
+
+        radar_point_from_radius(angle, RADAR_RADIUS_PIXELS, &x, &y);
+
+        display.drawLine(
+            RADAR_ORIGIN_X,
+            RADAR_ORIGIN_Y,
+            x,
+            y,
+            SSD1306_WHITE
+        );
+    }
+
+    // Centre point
+    display.fillCircle(RADAR_ORIGIN_X, RADAR_ORIGIN_Y, 2, SSD1306_WHITE);
+}
+
+// ------------------------------------------------------------
+// Draw angle and distance text at the top of the OLED
+// ------------------------------------------------------------
+
+void draw_radar_text(float angle_deg, float distance_cm, bool object_detected)
+{
+    // Clear text area
+    display.fillRect(0, 0, SCREEN_WIDTH, 10, SSD1306_BLACK);
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setCursor(0, 0);
+    display.print(F("A:"));
+    display.print((int)angle_deg);
+    display.print(F("deg"));
+
+    display.setCursor(62, 0);
+    display.print(F("D:"));
+
+    if (object_detected == true)
+    {
+        display.print(distance_cm, 0);
+        display.print(F("cm"));
+    }
+    else
+    {
+        display.print(F("---"));
+    }
+}
+
+// ------------------------------------------------------------
+// Draw sweep line and object marker
+// ------------------------------------------------------------
+
+void draw_radar_sweep(float angle_deg, float distance_cm, bool object_detected)
+{
+    int sweep_x;
+    int sweep_y;
+
+    // Sweep line goes all the way to the outside of the radar grid
+    radar_point_from_radius(
+        angle_deg,
+        RADAR_RADIUS_PIXELS,
+        &sweep_x,
+        &sweep_y
+    );
+
+    display.drawLine(
+        RADAR_ORIGIN_X,
+        RADAR_ORIGIN_Y,
+        sweep_x,
+        sweep_y,
+        SSD1306_WHITE
+    );
+
+    // Draw object marker only if an object was detected
+    if (object_detected == true)
+    {
+        int object_x;
+        int object_y;
+
+        radar_point_from_distance(
+            angle_deg,
+            distance_cm,
+            &object_x,
+            &object_y
+        );
+
+        // Filled dot
+        display.fillCircle(object_x, object_y, 2, SSD1306_WHITE);
+
+        // Outer ring around the detected object
+        display.drawCircle(object_x, object_y, 4, SSD1306_WHITE);
+    }
+}
+
+// ------------------------------------------------------------
+// Main function you call whenever you want to update the OLED
+// ------------------------------------------------------------
+
+void radar_display_update(float angle_deg, float distance_cm, bool object_detected)
+{
+    angle_deg = clamp_float(angle_deg, 0.0f, 180.0f);
+
+    display.clearDisplay();
+
+    draw_radar_grid();
+    draw_radar_sweep(angle_deg, distance_cm, object_detected);
+    draw_radar_text(angle_deg, distance_cm, object_detected);
+
+    display.display();
+}
+
+// ------------------------------------------------------------
+// OLED init function
+// Call this once from your setup/init code
+// ------------------------------------------------------------
+
+void oled_init(void)
+{
+    // Initialise I2C interface
+    Wire.begin();           // Join I2C bus as master
+    Wire.setClock(100000);  // 100 kHz standard I2C speed
+    
+    if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)){
+
+        usart_send_string("oled display init failed");
+        while (1) {
+            
+        }
+    }
+
+    display.clearDisplay();
+    display.display();
+}
+
+
+
 uint8_t get_adc_to_oled_contrast(uint16_t adc_raw){
 
     // Single conversion mode is active, so conversion only occurs
@@ -785,15 +1112,9 @@ void led_pwm_off(void)
 
 
 
-// Debugging USART functions //////////////////////////////////////////////////
-// void usart_clear_print(void){
-//     for (unsigned int i=0; i<500; i++) {
-//         usart_send_string("\n");
-//     }
-// }
-
-
-
+///////////////////////////////////////////////////////////////////////////////
+//                         Debugging USART functions                         //
+///////////////////////////////////////////////////////////////////////////////
 void usart_debugging(void){
 
     // Sets mode of debugging according to request from user PC serial
@@ -813,11 +1134,11 @@ void usart_debugging(void){
     // Xfer from  PC to MCU is  complete and via ISR.   We can
     // now process that data.
         
-    // Check if it's  exactly one digit 1–4 by  checking the ASCII
+    // Check if it's  exactly one digit 1–3 by  checking the ASCII
     // numbers.  Also,  reject non single character  entries, such
     // decimals and outside range ascii characters.
     if ( (usart_buffer[0]<'0')
-         || (usart_buffer[0]>'4')
+         || (usart_buffer[0]>'3')
          || (usart_buffer[1]!='\0') ){
         usart_send_string("Invalid selection. Try again\n");
 
@@ -857,7 +1178,6 @@ void print_usart_debugging_mode_menu(void){
     usart_send_string("1. Send sonar object distance measurments to PC.\n");
     usart_send_string("2. Send sonar angle to PC.\n");
     usart_send_string("3. Both data in mode 1 and 2 sent to PC.\n");
-    usart_send_string("4. ADC values sent from MCU to PC.\n");
 }
 
 
@@ -870,7 +1190,6 @@ void set_user_required_usart_debugging_mode(int8_t user_choice){
             usart_send_string("\nDebugging mode has been turned off.\n");
             usart_debugging_mode_object_distance = 0;
             usart_debugging_mode_angle = 0;
-            usart_debugging_mode_adc = 0;
             break;
         }
         case 1: {
@@ -892,11 +1211,6 @@ void set_user_required_usart_debugging_mode(int8_t user_choice){
             usart_debugging_mode_object_distance = 1;
             usart_debugging_mode_angle = 1;
             break;
-        }
-        case 4: {
-            usart_send_string("\nSending ADC values to PC via Teleplot\n");
-            usart_debugging_mode_adc = 1;
-            break;
         }   
         default:
             break;
@@ -905,8 +1219,10 @@ void set_user_required_usart_debugging_mode(int8_t user_choice){
 }
 
 
-
-void drive_servo(void)
+///////////////////////////////////////////////////////////////////////////////
+//                          State Machine functions                          //
+///////////////////////////////////////////////////////////////////////////////
+float drive_servo(void)
 {
 
     // Drive the servo  all the way forward and back  again wrt angle,
@@ -917,9 +1233,9 @@ void drive_servo(void)
     // With Ttick=0.5, period of one tick:
     //
     //  0.5 ms ~= 1000 ticks
-    //  1.0 ms ~= 2000    
+    //  1.0 mv ~= 2000    
     //  1.5 ms ~= 3000 ticks
-    //  2.0 ms ~= 4000
+    //  2.0 mv ~= 4000
     //  2.5 ms ~= 5000 ticks
     //
     // OCR1B controls the pulse width on OC1B/PB2/D10.
@@ -949,14 +1265,13 @@ void drive_servo(void)
 
     // Lower limit, 1ms pulse measured on the oscilloscope.
     // OCR1B = 2000;
-    // Centre, 1.5ms pulse
+    // Centre, 1.5ms puls
     //OCR1B = 3000;
     // Upper limit, 2ms pulse measured on the oscilloscope.
     //OCR1B = 4000;
 
     //usart_send_string("dbg: in drive_servo()\n");
-    
-    static unsigned char angle = SERVO_MIN_ANGLE;
+    static float angle = SERVO_MIN_ANGLE;
     static unsigned char moving_forward = 1;
     unsigned char angle_step = 5;
 
@@ -992,11 +1307,11 @@ void drive_servo(void)
         usart_send_string("\n");
     }
     
-    // Linearly map sevo angle to pulse with ranges.
+        // Linearly map sevo angle to pulse with ranges.
     OCR1B = (uint16_t)linear_mapping(angle, SERVO_MIN_ANGLE , SERVO_MAX_ANGLE,
                                      SERVO_MIN_PULSE_WIDTH,
                                      SERVO_MAX_PULSE_WIDTH);
-    
+
     
     // usart_send_string("OCR1B=");
     // usart_send_num(OCR1B, 4, 2);
@@ -1007,10 +1322,11 @@ void drive_servo(void)
 
     _delay_ms(200); // let the servo settle at it's new angle
 
+    return angle;
 }
 
 
-void sonar(void){
+float sonar(void){
 
     // Measure HCR-S04  ultrasonic sensor's length of  the echo signal
     // going  from  rising edge  to  falling  edge.  Using  this  then
@@ -1018,25 +1334,22 @@ void sonar(void){
     // object.
     
     // Debugging my_delay_us() to use in HC-SR04 trigger pulse
-    // while (1) {
-    //     bitC lear(PORTC, pin_trigger);
-    //     my_delay_us(10000UL);
-    //     bitSet(PORTC, pin_trigger);
-    //     my_delay_us(60000UL);       
-    // }
-
+    // bitClear(PORTC, pin_trigger);
+    // my_delay_us(10UL);
+    // bitSet(PORTC, pin_trigger);
+    // my_delay_us(10UL);
 
     //usart_send_string("dbg: in sonar()\n");
 
     // Trigger the sonar
     bitClear(PORTC, pin_trigger);
-    my_delay_us(2);
-    //_delay_us(2);
+    //my_delay_us(2);
+    _delay_us(2);
     bitSet(PORTC, pin_trigger);
     my_delay_us(11);
-    //_delay_us(11);
+    _delay_us(11);
     bitClear(PORTC, pin_trigger);
-
+        
 
     // Wait for falling edge capture, with a timeout
     unsigned long timeout = 30000;
@@ -1108,53 +1421,296 @@ void sonar(void){
     // Wait about 60 ms for hardware to reset before next sonar ping
 //        my_delay_us(60000UL);
     _delay_us(60000UL);
+
+    return distance_to_object;
 }
 
 
+// This very general version.
+//
+// void my_delay_us(unsigned long x)
+// {
+//     // Maximum delay is 1.19 hours.
+//     //
+//     // The practical maximum is unsigned long x, 32-bit on atmega328p.
+//     //
+//     // x_max=2^32-1=4,294,967,295us=4,294.967295s=71.5828minutes=1.19 hours
+//     //
+//     // However, on the atmega328p unsigned long long = uint_64t is the
+//     // largest integer you can use.
+//     //
+//     // But on the ATmega328P, bigger does not mean better. The chip is
+//     // an 8-bit microcontroller,  so 32-bit and 64-bit  maths are done
+//     // using multiple instructions in software.
+//     //
+//     // For timing code:
+//     //
+//     // uint8_t   // fastest
+//     // uint16_t  // still fairly good
+//     // uint32_t  // slower
+//     // uint64_t  // much slower
+//     //
+//     // We use  uint64_t total_ticks; // only used where overflow could happen
 
-// Original routine following Kai's demo codes.
+    
+//     /*
+//         General Timer2 CTC delay.
+
+//         Assumes Timer2 has already been configured in CTC mode:
+
+//             WGM22:0 = 010
+//             TOP = OCR2A
+
+//         With your current config_tc2():
+
+//             F_CPU        = 16000000 Hz
+//             prescalerTC2 = 8
+//             OCR2A        = 255
+
+//         Timer2 clock = F_CPU / prescalerTC2
+//                      = 16000000 / 8
+//                      = 2000000 Hz
+
+//         Timer2 tick period = 1 / 2000000
+//                            = 0.5 us
+
+//         So for your current setup:
+
+//             1 us  = 2 ticks
+//             10 us = 20 ticks
+//             11 us = 22 ticks
+//     */
+
+//     uint64_t total_ticks;
+//     uint32_t num_complete_ctc_periods;
+//     uint8_t remainder_ticks;
+//     uint16_t ticks_per_ctc_period;
+
+//     /*
+//         Convert delay time in us to Timer2 ticks.
+
+//         Formula:
+
+//             total_ticks = delay_us / tick_time_us
+
+//         Since:
+
+//             tick_time = prescaler / F_CPU
+
+//         Then:
+
+//             total_ticks = delay_us * F_CPU / prescaler
+
+//         But because delay_us is in microseconds:
+
+//             total_ticks =
+//                 delay_us * F_CPU / (prescaler * 1000000)
+
+//         The + divisor - 1 part rounds up, so the delay is not too short.
+//     */
+
+//     total_ticks =
+//         (
+//             ((uint64_t)x * (uint64_t)F_CPU) +
+//             (((uint64_t)prescalerTC2 * 1000000ULL) - 1)
+//         )
+//         /
+//         ((uint64_t)prescalerTC2 * 1000000ULL);
+
+//     /*
+//         In CTC mode with TOP = OCR2A, Timer2 counts:
+
+//             0, 1, 2, ..., OCR2A, 0, 1, 2, ...
+
+//         Therefore one full CTC period contains:
+
+//             OCR2A + 1 ticks
+
+//         With OCR2A = 255:
+
+//             ticks_per_ctc_period = 256
+//     */
+
+//     ticks_per_ctc_period = (uint16_t)OCR2A + 1;
+
+//     num_complete_ctc_periods =
+//         (uint32_t)(total_ticks / ticks_per_ctc_period);
+
+//     remainder_ticks =
+//         (uint8_t)(total_ticks % ticks_per_ctc_period);
+
+//     /*
+//         This delay function polls the compare-match flag directly,
+//         so disable the Timer2 compare interrupt while using it.
+
+//         That means this function does not rely on:
+
+//             ISR(TIMER2_COMPA_vect)
+//     */
+
+//     disable_tc2_interrupt;
+
+//     /*
+//         Delay for complete CTC periods.
+
+//         In CTC mode, OCF2A is set when TCNT2 matches OCR2A.
+//         We clear it by writing a 1 to OCF2A.
+//     */
+
+//     if (num_complete_ctc_periods > 0)
+//     {
+//         TCNT2 = 0;
+
+//         // Clear pending compare-match flag before starting.
+//         TIFR2 = (1 << OCF2A);
+
+//         while (num_complete_ctc_periods > 0)
+//         {
+//             // Wait until Timer2 reaches OCR2A.
+//             while (!bitCheck(TIFR2, OCF2A))
+//             {
+//                 // wait
+//             }
+
+//             // Clear compare-match flag.
+//             TIFR2 = (1 << OCF2A);
+
+//             num_complete_ctc_periods--;
+//         }
+//     }
+
+//     /*
+//         Delay for the remaining ticks.
+
+//         Example with your current settings:
+
+//             my_delay_us(11)
+
+//             total_ticks = 22
+//             num_complete_ctc_periods = 22 / 256 = 0
+//             remainder_ticks = 22
+
+//         Then this waits until TCNT2 reaches 22.
+//     */
+
+//     if (remainder_ticks > 0)
+//     {
+//         TCNT2 = 0;
+
+//         while (TCNT2 < remainder_ticks)
+//         {
+//             // wait
+//         }
+//     }
+// }
+
+
+// I get a good 11ms pulse but can't give it more than 286us
 //
 void my_delay_us(unsigned long x){
-
-    // Delays, determined with a hardware timer/counter for x us.
-
-    // This  version  of  my_delay_us()  is limited  by  the  size  of
-    // unsigned long. Hence x_max=2^32-1=4,294,967,295 us=4,294.967295
-    // s=71.5828 minutes=1.193hours
     
+    // Delay x us
+
+    // This  version uses  unsigned  longs so  the  maximum delay  is:
+    // unsigned  long  max=4,294,967,295, the  multiplication  happens
+    // first so with F_CPU ~=268us
     
-    // NOTE: that a float assigned  to an integer returns the interger
-    // value with no decimal pont values.
+    // Remember we are trying to  avoid floating point calculations as
+    // these are very slow on the atmega328p.
+
+    unsigned long total_ticks;
+    unsigned long num_complete_ctc_periods;
+    unsigned char remainder_ticks;
+
+    
+    // total_ticks = x / period_of_one_tick_in_us
+    //
+    // period_of_one_tick = 1 / F
+    // F = F_CPU / prescaler
+    // period_of_one_tick = 1 / (F_CPU / prescaler)
+    // period_of_one_tick = prescaler / F_CPU
+    //
+    // period_of_one_tick_us = (prescaler / F_CPU) * 1000000UL
+    // period_of_one_tick_us = (prescaler * 1000000UL) / F_CPU
+    //
+    // total_ticks = x / ((prescaler * 1000000UL) / F_CPU)
+    // total_ticks = x * F_CPU / (prescalerTC2 * 1000000UL);
+    // == total_ticks = x * (F_CPU / prescalerTC2 / 1000000UL);
+
+    total_ticks = x * F_CPU / (prescalerTC2 * 1000000UL);
         
-    // Number of complete Timer2 overflow periods needed.
-    unsigned long num_complete_overflows = ( (float)x / timer2_overflow_time_us );
 
-    // Remaining time after complete overflows, in microseconds.
-    float remainder_time_us =
-        (  (float)x - ((float)num_complete_overflows*timer2_overflow_time_us) );
+    // Remember  that TC2  is an  8 bit  Timer/Counter so  its maximum
+    // count is 256 values.
+    num_complete_ctc_periods = total_ticks / 256UL;
+    remainder_ticks = total_ticks % 256UL;
 
-    // Convert remaining time into Timer2 ticks.
-    unsigned char remainder_time_ticks =
-        ( remainder_time_us / (period_of_tick_tc2 * 1.0e6) );
-
-    //  Delay for complete number of overflows of Timer2
-    if (num_complete_overflows > 0){
+    // Delay for complete number of of Timer2 compare matches.
+    if (num_complete_ctc_periods > 0){
         num_timer2_overflows = 0;
         TCNT2 = 0;
-
-        // // TODO: Test  Clears  and pending  overflow flag  so the  ISR doen't  run
-        // immediately and have the delay overflow too short.
-        //TIFR2 = (1 << TOV2);
+        TIFR2 = (1 << OCF2A);
 
         enable_tc2_interrupt;
-        while (num_timer2_overflows < num_complete_overflows);
+        while (num_timer2_overflows < num_complete_ctc_periods)
+        {
+            // wait
+        }
         disable_tc2_interrupt;
     }
 
-    // Delay for remainder number of ticks
+    // Delay for the remainder number of Timer2 ticks
     TCNT2 = 0;
-    while (TCNT2 < remainder_time_ticks);
+    while (TCNT2 < remainder_ticks){
+        // wait
+    }
 }
+
+
+// // Original routine following Kai's demo codes.  Due to floating point
+// // calculations it is not good for long delays.
+// //
+// void my_delay_us(unsigned long x){
+
+//     // Delays, determined with a hardware timer/counter for x us.
+
+//     // This  version  of  my_delay_us()  is limited  by  the  size  of
+//     // unsigned long. Hence x_max=2^32-1=4,294,967,295 us=4,294.967295
+//     // s=71.5828 minutes=1.193hours
+    
+    
+//     // NOTE: that a float assigned  to an integer returns the interger
+//     // value with no decimal pont values.
+        
+//     // Number of complete Timer2 overflow periods needed.
+//     unsigned long num_complete_overflows = ( (float)x / timer2_overflow_time_us );
+
+//     // Remaining time after complete overflows, in microseconds.
+//     float remainder_time_us =
+//         (  (float)x - ((float)num_complete_overflows*timer2_overflow_time_us) );
+
+//     // Convert remaining time into Timer2 ticks.
+//     unsigned char remainder_time_ticks =
+//         ( remainder_time_us / (period_of_tick_tc2 * 1.0e6) );
+
+//     //  Delay for complete number of overflows of Timer2
+//     if (num_complete_overflows > 0){
+//         num_timer2_overflows = 0;
+//         TCNT2 = 0;
+
+//         // // TODO: Test  Clears  and pending  overflow flag  so the  ISR doen't  run
+//         // immediately and have the delay overflow too short.
+//         //TIFR2 = (1 << TOV2);
+
+//         enable_tc2_interrupt;
+//         while (num_timer2_overflows < num_complete_overflows);
+//         disable_tc2_interrupt;
+//     }
+
+//     // Delay for remainder number of ticks
+//     TCNT2 = 0;
+//     while (TCNT2 < remainder_time_ticks);
+// }
 
 
 
@@ -1301,7 +1857,9 @@ void interrupt_init(void){
 }
 
 
-
+///////////////////////////////////////////////////////////////////////////////
+//                         USART debugging functions                         //
+///////////////////////////////////////////////////////////////////////////////
 void usart_init(float baud_rate){
 
 
