@@ -498,6 +498,9 @@ void config_tc1(void)
 
 void config_tc0(void){
 
+    // Drive LED continuously with Phase Correct PWM TOP Mode.
+    
+
     // In our phase correct PWM TOP mode we need to * 2 as the counter
     // overflows after it counts from BOTTOM to TOP and back downwards
     // to BOTTOM again, that is:
@@ -528,9 +531,8 @@ void config_tc0(void){
     TCCR0B = (1 << WGM02) | (1 << CS00) | (1 << CS01);
 
 
-    // Setting TOP  for phase  correct PWM  TOP Mode  of TC0.   From a
-    // positive linear mapping  of last three digits of  my student id
-    // card to TOP value range.
+    // Setting TOP for phase correct PWM TOP Mode of TC0 to drive the
+    // LED.
     //
     // TCO is an 8 bit counter so it's range is from 0-255
     //
@@ -544,7 +546,7 @@ void config_tc0(void){
     //
     OCR0A = 255; // Maximum for this 8 bit register
 
-     // This sets the Duty Cycle of the PWM signal on OCOB/PD5, always on.
+    // This sets the Duty Cycle of the PWM signal on OCOB/PD5, always on.
     OCR0B = 255;
 
 }
@@ -593,6 +595,7 @@ int main(void){
 
 
     usart_init(9600);
+
 
     // Config TC0 in Phase Correct PWM for LED
     config_tc0();
@@ -654,13 +657,13 @@ int main(void){
 
         oled_contrast =  get_adc_to_oled_contrast(adc_raw);
         
-        // usart_send_string(">adc_raw:");
-        // usart_send_num(adc_raw, 4, 0);
-        // usart_send_string("\n"); 
+        usart_send_string(">adc_raw:");
+        usart_send_num(adc_raw, 4, 0);
+        usart_send_string("\n"); 
 
-        // usart_send_string(">oled_contrast:");
-        // usart_send_num(oled_contrast, 3, 0);
-        // usart_send_string("\n");
+        usart_send_string(">oled_contrast:");
+        usart_send_num(oled_contrast, 3, 0);
+        usart_send_string("\n");
 
         
         // Setup  state  machine  mode  transitions.
@@ -894,9 +897,9 @@ void drive_servo(void)
     // With Ttick=0.5, period of one tick:
     //
     //  0.5 ms ~= 1000 ticks
-    //  1.0 mv ~= 2000    
+    //  1.0 ms ~= 2000    
     //  1.5 ms ~= 3000 ticks
-    //  2.0 mv ~= 4000
+    //  2.0 ms ~= 4000
     //  2.5 ms ~= 5000 ticks
     //
     // OCR1B controls the pulse width on OC1B/PB2/D10.
@@ -926,7 +929,7 @@ void drive_servo(void)
 
     // Lower limit, 1ms pulse measured on the oscilloscope.
     // OCR1B = 2000;
-    // Centre, 1.5ms puls
+    // Centre, 1.5ms pulse
     //OCR1B = 3000;
     // Upper limit, 2ms pulse measured on the oscilloscope.
     //OCR1B = 4000;
@@ -969,11 +972,11 @@ void drive_servo(void)
         usart_send_string("\n");
     }
     
-        // Linearly map sevo angle to pulse with ranges.
+    // Linearly map sevo angle to pulse with ranges.
     OCR1B = (uint16_t)linear_mapping(angle, SERVO_MIN_ANGLE , SERVO_MAX_ANGLE,
                                      SERVO_MIN_PULSE_WIDTH,
                                      SERVO_MAX_PULSE_WIDTH);
-
+    
     
     // usart_send_string("OCR1B=");
     // usart_send_num(OCR1B, 4, 2);
