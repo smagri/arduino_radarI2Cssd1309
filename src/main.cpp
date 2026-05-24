@@ -15,6 +15,7 @@
 #include <util/delay.h>
 #include <avr/interrupt.h>
 #include <stdlib.h>
+#include <avr/pgmspace.h>
 
 
 
@@ -106,6 +107,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 #define PI_FLOAT 3.14159265f
 
+#define usart_send_string_flash(str) usart_send_string_flash_real(PSTR(str))
 
 /// / Total _time_ taken for the counter to count from 0->TOP-1 again.
 // // For the fast PWM TOP signal.
@@ -187,6 +189,7 @@ void usart_flush(void);
 void usart_read_string(char *ptr_to_str);
 void usart_send_byte(unsigned char data);
 void usart_send_string(const char *ptr_to_str);
+void usart_send_string_flash_real(const char *ptr_to_str);
 void usart_send_num(float num, char num_int, char num_decimal);
 void print_usart_debugging_mode_menu(void);
 void set_user_required_usart_debugging_mode(int8_t user_choice);
@@ -688,7 +691,7 @@ int main(void){
     //usart_send_string("dbg: in INIT_FINISHED\n");
 
     //usart_clear_print();
-    usart_send_string("REBOOT!!!\n");
+    usart_send_string_flash("REBOOT!!!\n");
     usart_flush();
     print_usart_debugging_mode_menu();
     
@@ -711,13 +714,13 @@ int main(void){
         oled_contrast =  get_adc_to_oled_contrast(adc_raw);
 
         if (usart_debugging_mode_adc){
-            usart_send_string(">adc_raw:");
+            usart_send_string_flash(">adc_raw:");
             usart_send_num(adc_raw, 4, 0);
-            usart_send_string("\n"); 
+            usart_send_string_flash("\n"); 
 
-            usart_send_string(">oled_contrast:");
+            usart_send_string_flash(">oled_contrast:");
             usart_send_num(oled_contrast, 3, 0);
-            usart_send_string("\n");
+            usart_send_string_flash("\n");
         }
         
         // Setup  state  machine  mode  transitions.
@@ -871,7 +874,7 @@ void usart_debugging(void){
     if ( (usart_buffer[0]<'0')
          || (usart_buffer[0]>'4')
          || (usart_buffer[1]!='\0') ){
-        usart_send_string("Invalid selection. Try again\n");
+        usart_send_string_flash("Invalid selection. Try again\n");
 
         // Ignore this  byte and get  ready for the  next byte
         // from the RX buffer.
@@ -904,12 +907,12 @@ void print_usart_debugging_mode_menu(void){
 
     // Output the menu for debugging operations.
     usart_send_byte('\n');
-    usart_send_string("\nEnter a number for usart debugging required:\n");
-    usart_send_string("0. Switch off debugging mode, no data from MCU to PC.\n");
-    usart_send_string("1. Send sonar object distance measurments to PC.\n");
-    usart_send_string("2. Send sonar angle to PC.\n");
-    usart_send_string("3. Both data in mode 1 and 2 sent to PC.\n");
-    usart_send_string("4. ADC values sent from MCU to PC.\n");
+    usart_send_string_flash("\nEnter a number for usart debugging required:\n");
+    usart_send_string_flash("0. Switch off debugging mode, no data from MCU to PC.\n");
+    usart_send_string_flash("1. Send sonar object distance measurments to PC.\n");
+    usart_send_string_flash("2. Send sonar angle to PC.\n");
+    usart_send_string_flash("3. Both data in mode 1 and 2 sent to PC.\n");
+    usart_send_string_flash("4. ADC values sent from MCU to PC.\n");
 }
 
 
@@ -919,34 +922,34 @@ void set_user_required_usart_debugging_mode(int8_t user_choice){
 
     switch (user_choice) {
         case 0: {
-            usart_send_string("\nDebugging mode has been turned off.\n");
+            usart_send_string_flash("\nDebugging mode has been turned off.\n");
             usart_debugging_mode_object_distance = 0;
             usart_debugging_mode_angle = 0;
             usart_debugging_mode_adc = 0;
             break;
         }
         case 1: {
-            usart_send_string("\nSending sonar object distance measurments");
-            usart_send_string(" to PC via Serial Monitor\n");
+            usart_send_string_flash("\nSending sonar object distance measurments");
+            usart_send_string_flash(" to PC via Serial Monitor\n");
             usart_debugging_mode_object_distance = 1;
             break;
         }
         case 2: {
-            usart_send_string("\nSending sonar angle measurements");
-            usart_send_string(" to PC via Serial Monitor\n");
+            usart_send_string_flash("\nSending sonar angle measurements");
+            usart_send_string_flash(" to PC via Serial Monitor\n");
             usart_debugging_mode_angle = 1;
             usart_debugging_mode_object_distance = 0;
             break;
         }
         case 3: {
-            usart_send_string("\nSending both data measurements from mode 1 and 2");
-            usart_send_string(" to PC via Serial Monitor\n");
+            usart_send_string_flash("\nSending both data measurements from mode 1 and 2");
+            usart_send_string_flash(" to PC via Serial Monitor\n");
             usart_debugging_mode_object_distance = 1;
             usart_debugging_mode_angle = 1;
             break;
         }
         case 4: {
-            usart_send_string("\nSending ADC values to PC via Teleplot\n");
+            usart_send_string_flash("\nSending ADC values to PC via Teleplot\n");
             usart_debugging_mode_adc = 1;
             break;
         }   
@@ -1039,9 +1042,9 @@ float drive_servo(void)
     }
 
     if (usart_debugging_mode_angle){
-     usart_send_string("Current Angle:");
+     usart_send_string_flash("Current Angle:");
      usart_send_num(angle, 5, 2);
-        usart_send_string("\n");
+        usart_send_string_flash("\n");
     }
     
     // Linearly map sevo angle to pulse with ranges.
@@ -1145,9 +1148,9 @@ float sonar(void){
         // Print debugging info to serial monitor
         if (usart_debugging_mode_object_distance){
             
-            usart_send_string("Distance to Object:");
+            usart_send_string_flash("Distance to Object:");
             usart_send_num((distance_to_object*100.0), 6, 3);
-            usart_send_string("cm\n");
+            usart_send_string_flash("cm\n");
             
         //_delay_ms(100);
         }
@@ -1155,7 +1158,7 @@ float sonar(void){
     }
     else{
         if (usart_debugging_mode_object_distance){
-            usart_send_string("No echo detected\n");
+            usart_send_string_flash("No echo detected\n");
         }
     }
 
@@ -1387,7 +1390,7 @@ void oled_init(void)
     
     if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)){
 
-        usart_send_string("OLED display init failed rest of state machine will"
+        usart_send_string_flash("OLED display init failed rest of state machine will"
                           " not execute.\n");
 
         while (1) {
@@ -1701,11 +1704,18 @@ void usart_send_byte(unsigned char data){
 
 
 
+void usart_send_string_flash_real(const char *flash_str){
+    char c;
+
+    while ((c = pgm_read_byte(flash_str++)) != '\0')
+    {
+        usart_send_byte(c);
+    } 
+}
 
 // check if const is really needed, cgpt says c++ compiler is strictor
 // than c compiler.
 void usart_send_string(const char *pstr){
-    
     // note:  const means  a  read-only-string, prevents  accidentally
     // modifying  string   literals(which  causes   crashes).   String
     // literals in c  are a sequence of characters  enclosed in double
@@ -1720,6 +1730,7 @@ void usart_send_string(const char *pstr){
         pstr++;
     }
 }
+
 
 
 
