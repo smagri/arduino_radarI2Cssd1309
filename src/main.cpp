@@ -3,6 +3,13 @@
 #endif // Set system clock frequency
 
 
+// Arduino libraries  for ssd1306 OLED  display, allowed to use  as it
+// was not covered in the course.
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <math.h>
 
 #include <avr/io.h>
 #include <util/delay.h>
@@ -77,6 +84,27 @@
 #define OLED_CONTRAST_MIN 0
 #define OLED_CONTRAST_MAX 255
 
+// Radar display settings:
+//
+#define SCREEN_WIDTH   128
+#define SCREEN_HEIGHT  64
+#define OLED_RESET     -1
+#define SCREEN_ADDRESS 0x3C
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Radar origin is at the bottom-centre of the OLED
+#define RADAR_ORIGIN_X 64
+#define RADAR_ORIGIN_Y 63
+
+// Leave some space at the top for angle/distance text
+#define RADAR_RADIUS_PIXELS 48
+
+// Maximum displayed radar distance
+//#define RADAR_MAX_DISTANCE_CM 100.0f
+#define RADAR_MAX_DISTANCE_CM 200.0f
+
+#define PI_FLOAT 3.14159265f
 
 
 /// / Total _time_ taken for the counter to count from 0->TOP-1 again.
@@ -134,6 +162,10 @@ bool usart_debugging_mode_adc = 0;
 // xfer of string from PC to MCU is complete or not.
 volatile bool flag_rx_done = 0; // Initialised to not complete.
 
+// radar/ultrasonic sensor current angle and distance to object
+float cur_radar_angle;
+float cur_radar_distance_to_object;
+
 
 // Setup State Types
 typedef enum{
@@ -165,13 +197,25 @@ void config_tc1(void);
 void config_tc0(void);
 void interrupt_init(void);
 void my_delay_us(unsigned long x);
-void sonar(void);
-void drive_servo(void);
+float sonar(void);
+float drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
 void led_pwm_on(void);
 void led_pwm_off(void);
 void adc_init(void);
 uint8_t get_adc_to_oled_contrast(uint16_t adc_raw);
+
+//  OLED radar display functions:
+float clamp_float(float value, float minimum, float maximum);
+void radar_point_from_radius(float angle_deg, float radius_pixels, int *x, int *y);
+void radar_point_from_distance(float angle_deg, float distance_cm, int *x, int *y);
+void draw_radar_arc(int radius_pixels);
+void draw_radar_grid(void);
+void draw_radar_text(float angle_deg, float distance_cm, bool object_detected);
+void draw_radar_sweep(float angle_deg, float distance_cm, bool object_detected);
+void radar_display_update(float angle_deg, float distance_cm, bool object_detected);
+void oled_init(void);
+
 
 
 ISR(ADC_vect){
@@ -626,6 +670,11 @@ int main(void){
                 
     sei(); // Enable global interrupts
 
+    // Initalise adafruit  arduino librarys to just  configure I2C not
+    // the  whole of  init()  as this  interfers  with my  TC0/TC1/TC2
+    // configurations.
+    oled_init();
+
     // ADSC sets  the ADC to  start conversions.  Setting this  bit is
     // the  "software trigger"  that  tells the  hardware to  actually
     // begin the  electrical process  of sampling  the voltage  on the
@@ -714,7 +763,7 @@ int main(void){
 
                 //usart_send_string("dbg: in SERVO_MODE\n");
 
-                drive_servo();
+                cur_radar_angle = drive_servo();
                 state_current = SONAR_MODE;
 
                 break;
@@ -723,14 +772,17 @@ int main(void){
 
                 //usart_send_string("dbg: in SONAR_MODE\n");
 
-                sonar();
+                cur_radar_distance_to_object = sonar();
                 state_current = SERVO_MODE;
                 break;
             }
             default:
                 break;
         }
-        
+
+        // Update ssd1306 OLED
+        radar_display_update(cur_radar_angle, cur_radar_distance_to_object,
+                             true);
         
     } // end: while(1)
 
@@ -906,7 +958,7 @@ void set_user_required_usart_debugging_mode(int8_t user_choice){
 
 
 
-void drive_servo(void)
+float drive_servo(void)
 {
 
     // Drive the servo  all the way forward and back  again wrt angle,
@@ -1007,10 +1059,12 @@ void drive_servo(void)
 
     _delay_ms(200); // let the servo settle at it's new angle
 
+    return angle;
 }
 
 
-void sonar(void){
+
+float sonar(void){
 
     // Measure HCR-S04  ultrasonic sensor's length of  the echo signal
     // going  from  rising edge  to  falling  edge.  Using  this  then
@@ -1108,6 +1162,8 @@ void sonar(void){
     // Wait about 60 ms for hardware to reset before next sonar ping
 //        my_delay_us(60000UL);
     _delay_us(60000UL);
+
+    return distance_to_object;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1331,7 +1387,9 @@ void oled_init(void)
     
     if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)){
 
-        usart_send_string("OLED display init failed.\n");
+        usart_send_string("OLED display init failed rest of state machine will"
+                          " not execute.\n");
+
         while (1) {
             
         }
