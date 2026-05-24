@@ -226,7 +226,7 @@ ISR(INT0_vect){
     // falling edge, ie high to low, when the button is pressed.
     
      // crude debouncing // TODO: implement proper debounceing code.
-    _delay_ms(10);
+    my_delay_us(10);
     if (!bitRead(PIND, pin_int0_interrupt))
         flag_system_stop = 1;
 
