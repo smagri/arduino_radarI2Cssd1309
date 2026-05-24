@@ -273,7 +273,7 @@ ISR(INT0_vect){
     // falling edge, ie high to low, when the button is pressed.
     
      // crude debouncing // TODO: implement proper debounceing code.
-    my_delay_us(10);
+    _delay_ms(10);
     if (!bitRead(PIND, pin_int0_interrupt))
         flag_system_stop = 1;
 
@@ -686,7 +686,7 @@ int main(void){
     // conversion mode  as the  conversion occurs  only once  for each
     // time ADSC is set.
     bitSet(ADCSRA, ADSC);
-    _delay_ms(10);
+    my_delay_us(10000UL);
     
     //usart_send_string("dbg: in INIT_FINISHED\n");
 
@@ -758,7 +758,7 @@ int main(void){
             case IDLE_MODE: {
 
                 //usart_send_string("dbg: in IDLE_MODE\n");
-                _delay_ms(1000);
+                my_delay_us(1000000UL);
 
                 break;
             }
@@ -994,19 +994,19 @@ float drive_servo(void)
     //      pulse_width_ticks+=200){
         
     //     OCR1B = pulse_width_ticks;
-    //     _delay_ms(100); // let the servo settle
+    //     my_delay_us(100000UL); // let the servo settle
     // }
 
-    // _delay_ms(1000);
+    // my_delay_us(1000000UL);
 
     // // Sweep from 180 degrees to 0 degrees
     // for (unsigned int pulse_width_ticks=5000; pulse_width_ticks>=1000;
     //      pulse_width_ticks-=200){
 
     //     OCR1B = pulse_width_ticks;
-    //     _delay_ms(100);
+    //     my_delay_us(100000UL);
     // }
-    // _delay_ms(1000);
+    // my_delay_us(1000000UL);
 
     // Lower limit, 1ms pulse measured on the oscilloscope.
     // OCR1B = 2000;
@@ -1066,7 +1066,7 @@ float drive_servo(void)
     // usart_send_num(angle, 4, 2);
     // usart_send_byte('\n');
 
-    _delay_ms(200); // let the servo settle at it's new angle
+    my_delay_us(200000UL); // let the servo settle at it's new angle
 
     return angle;
 }
@@ -1093,19 +1093,16 @@ float sonar(void){
 
     // Trigger the sonar
     bitClear(PORTC, pin_trigger);
-    my_delay_us(2);
-    //_delay_us(2);
+    my_delay_us(2UL);
     bitSet(PORTC, pin_trigger);
-    my_delay_us(11);
-    //_delay_us(11);
+    my_delay_us(11UL);
     bitClear(PORTC, pin_trigger);
 
 
     // Wait for falling edge capture, with a timeout
     unsigned long timeout = 30000;
     while (!echo_signal_high_detected && timeout > 0) {
-        //my_delay_us(1);
-        _delay_us(1);
+        my_delay_us(1);
         timeout--;
     }
 
@@ -1160,7 +1157,7 @@ float sonar(void){
             usart_send_num((distance_to_object_cm), 6, 3);
             usart_send_string_flash("cm\n");
             
-        //_delay_ms(100);
+        //my_delay_ms(100000UL);
         }
 
     }
@@ -1171,9 +1168,8 @@ float sonar(void){
     }
 
     // Wait about 60 ms for hardware to reset before next sonar ping
-//        my_delay_us(60000UL);
-    _delay_us(60000UL);
-
+    my_delay_us(60000UL);
+    
     // return distance in cm for OLED and serial monitor display
     return (distance_to_object_cm);
 }
