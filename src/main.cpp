@@ -166,7 +166,7 @@ volatile bool flag_rx_done = 0; // Initialised to not complete.
 
 // radar/ultrasonic sensor current angle and distance to object
 float cur_radar_angle;
-float cur_radar_distance_to_object;
+float cur_radar_distance_to_object_cm;
 
 
 // Setup State Types
@@ -775,7 +775,13 @@ int main(void){
 
                 //usart_send_string("dbg: in SONAR_MODE\n");
 
-                cur_radar_distance_to_object = sonar();
+                cur_radar_distance_to_object_cm = sonar();
+                bool object_detected = (cur_radar_distance_to_object_cm >= 0.0f);
+                
+                if (!object_detected) {
+                    cur_radar_distance_to_object_cm = 0.0f;
+                }
+                
                 state_current = SERVO_MODE;
                 break;
             }
@@ -784,7 +790,7 @@ int main(void){
         }
 
         // Update ssd1306 OLED
-        radar_display_update(cur_radar_angle, cur_radar_distance_to_object,
+        radar_display_update(cur_radar_angle, cur_radar_distance_to_object_cm,
                              true);
         
     } // end: while(1)
@@ -1013,7 +1019,7 @@ float drive_servo(void)
     
     static unsigned char angle = SERVO_MIN_ANGLE;
     static unsigned char moving_forward = 1;
-    unsigned char angle_step = 5;
+    unsigned char angle_step = 1;
 
     // Sweep the servo from 1ms pulse  to 2ms pulse, has been measured
     // on the oscilloscope.  Increment angle by 5  degrees every time,
@@ -1103,9 +1109,10 @@ float sonar(void){
         timeout--;
     }
 
+    float distance_to_object_cm = -1.0f;  // -1 means no valid echo
     float tHigh_copy; // Echo signal high time from AC+TC.
     float tLow_copy;  // Echo signal low time from AC+TC.
-    float distance_to_object;
+    float distance_to_object_m; // distance to object in metres
     float time_echo_signal_is_high;
     // Velocity of sound about 343m/s at 25degreesC.
     float velocity_of_sound = 343;
@@ -1136,8 +1143,9 @@ float sonar(void){
         // The velocity of a sound wave is 346m/s@25degreesC.
     
         time_echo_signal_is_high = tHigh_copy;
-        distance_to_object = ((time_echo_signal_is_high * velocity_of_sound) / 2);
-    
+        distance_to_object_m = ((time_echo_signal_is_high * velocity_of_sound) / 2);
+        distance_to_object_cm = distance_to_object_m * 100.0f;  // convert to cm
+
 
         // Debugging, send values to serial monitor
         // usart_send_string("Echo Signal High=");
@@ -1149,7 +1157,7 @@ float sonar(void){
         if (usart_debugging_mode_object_distance){
             
             usart_send_string_flash("Distance to Object:");
-            usart_send_num((distance_to_object*100.0), 6, 3);
+            usart_send_num((distance_to_object_cm), 6, 3);
             usart_send_string_flash("cm\n");
             
         //_delay_ms(100);
@@ -1166,7 +1174,8 @@ float sonar(void){
 //        my_delay_us(60000UL);
     _delay_us(60000UL);
 
-    return distance_to_object;
+    // return distance in cm for OLED and serial monitor display
+    return (distance_to_object_cm);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
