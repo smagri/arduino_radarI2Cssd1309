@@ -107,6 +107,16 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 #define PI_FLOAT 3.14159265f
 
+
+// On an Arduino Uno, the SSD1306 128×64 display needs a 1024-byte RAM
+// framebuffer.   Normal  variables,  USART buffer,  Adafruit  object,
+// stack, and  plain C string literals  all share the Uno’s  tiny 2 KB
+// SRAM.  If  display.begin() cannot  allocate the display  buffer, it
+// returns false, which sends the program oled_init() into failed mode
+// and the state machine does not  run.  This uses an AVR technique to
+// store  the c  string  literals in  flash not  SRAM  and avoid  this
+// problem.
+//    
 #define usart_send_string_flash(str) usart_send_string_flash_real(PSTR(str))
 
 /// / Total _time_ taken for the counter to count from 0->TOP-1 again.
@@ -1429,8 +1439,8 @@ void oled_init(void)
     
     if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)){
 
-        usart_send_string_flash("OLED display init failed rest of state machine will"
-                          " not execute.\n");
+        usart_send_string_flash("OLED display init failed rest of state machine"
+                                " will not execute.\n");
 
         while (1) {
             
@@ -1744,6 +1754,10 @@ void usart_send_byte(unsigned char data){
 
 
 void usart_send_string_flash_real(const char *flash_str){
+
+    // AVR method to store strings  in flash instead of SRAM.  Arduino
+    // has 2kB of SRAM and the screen takes up 1kB on its own.
+    
     char c;
 
     while ((c = pgm_read_byte(flash_str++)) != '\0')
@@ -1752,8 +1766,7 @@ void usart_send_string_flash_real(const char *flash_str){
     } 
 }
 
-// check if const is really needed, cgpt says c++ compiler is strictor
-// than c compiler.
+// check if const is really needed, c++ compiler is strictor than c compiler.
 void usart_send_string(const char *pstr){
     // note:  const means  a  read-only-string, prevents  accidentally
     // modifying  string   literals(which  causes   crashes).   String
