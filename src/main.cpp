@@ -752,7 +752,10 @@ int main(void){
             flag_system_stop = 0;
 
             led_pwm_off();
-            
+
+            display.clearDisplay();
+            display.display();
+    
             state_current = IDLE_MODE;
         }
 
@@ -786,6 +789,10 @@ int main(void){
                 if (!object_detected) {
                     cur_radar_distance_to_object_cm = 0.0f;
                 }
+
+                // Update ssd1306 OLED
+                radar_display_update(cur_radar_angle, cur_radar_distance_to_object_cm,
+                                     true);
                 
                 state_current = SERVO_MODE;
                 break;
@@ -794,9 +801,7 @@ int main(void){
                 break;
         }
 
-        // Update ssd1306 OLED
-        radar_display_update(cur_radar_angle, cur_radar_distance_to_object_cm,
-                             true);
+
         
     } // end: while(1)
 
