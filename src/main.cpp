@@ -1110,6 +1110,237 @@ void sonar(void){
     _delay_us(60000UL);
 }
 
+///////////////////////////////////////////////////////////////////////////////
+//                        OLED radar display functions                       //
+///////////////////////////////////////////////////////////////////////////////
+
+// ------------------------------------------------------------
+// Helper: clamp a float value
+// ------------------------------------------------------------
+
+float clamp_float(float value, float minimum, float maximum)
+{
+    if (value < minimum)
+    {
+        return minimum;
+    }
+
+    if (value > maximum)
+    {
+        return maximum;
+    }
+
+    return value;
+}
+
+// ------------------------------------------------------------
+// Convert angle + pixel radius into OLED x/y position
+//
+// Angle convention:
+//     0 degrees   = right side
+//     90 degrees  = straight up
+//     180 degrees = left side
+// ------------------------------------------------------------
+
+void radar_point_from_radius(float angle_deg, float radius_pixels, int *x, int *y)
+{
+    float angle_rad = angle_deg * PI_FLOAT / 180.0f;
+
+    *x = RADAR_ORIGIN_X + (int)(radius_pixels * cos(angle_rad));
+    *y = RADAR_ORIGIN_Y - (int)(radius_pixels * sin(angle_rad));
+}
+
+// ------------------------------------------------------------
+// Convert angle + distance in cm into OLED x/y position
+// ------------------------------------------------------------
+
+void radar_point_from_distance(float angle_deg, float distance_cm, int *x, int *y)
+{
+    distance_cm = clamp_float(distance_cm, 0.0f, RADAR_MAX_DISTANCE_CM);
+
+    float radius_pixels =
+        (distance_cm / RADAR_MAX_DISTANCE_CM) * RADAR_RADIUS_PIXELS;
+
+    radar_point_from_radius(angle_deg, radius_pixels, x, y);
+}
+
+// ------------------------------------------------------------
+// Draw one semi-circle arc for the radar grid
+// ------------------------------------------------------------
+
+void draw_radar_arc(int radius_pixels)
+{
+    for (int angle = 0; angle <= 180; angle += 2)
+    {
+        int x;
+        int y;
+
+        radar_point_from_radius(angle, radius_pixels, &x, &y);
+
+        display.drawPixel(x, y, SSD1306_WHITE);
+    }
+}
+
+// ------------------------------------------------------------
+// Draw the fixed radar grid
+// ------------------------------------------------------------
+
+void draw_radar_grid(void)
+{
+    // Baseline
+    display.drawFastHLine(
+        RADAR_ORIGIN_X - RADAR_RADIUS_PIXELS,
+        RADAR_ORIGIN_Y,
+        RADAR_RADIUS_PIXELS * 2,
+        SSD1306_WHITE
+    );
+
+    // Distance arcs
+    draw_radar_arc(RADAR_RADIUS_PIXELS / 3);
+    draw_radar_arc((RADAR_RADIUS_PIXELS * 2) / 3);
+    draw_radar_arc(RADAR_RADIUS_PIXELS);
+
+    // Angle lines every 30 degrees
+    for (int angle = 0; angle <= 180; angle += 30)
+    {
+        int x;
+        int y;
+
+        radar_point_from_radius(angle, RADAR_RADIUS_PIXELS, &x, &y);
+
+        display.drawLine(
+            RADAR_ORIGIN_X,
+            RADAR_ORIGIN_Y,
+            x,
+            y,
+            SSD1306_WHITE
+        );
+    }
+
+    // Centre point
+    display.fillCircle(RADAR_ORIGIN_X, RADAR_ORIGIN_Y, 2, SSD1306_WHITE);
+}
+
+// ------------------------------------------------------------
+// Draw angle and distance text at the top of the OLED
+// ------------------------------------------------------------
+
+void draw_radar_text(float angle_deg, float distance_cm, bool object_detected)
+{
+    // Clear text area
+    display.fillRect(0, 0, SCREEN_WIDTH, 10, SSD1306_BLACK);
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setCursor(0, 0);
+    display.print(F("A:"));
+    display.print((int)angle_deg);
+    display.print(F("deg"));
+
+    display.setCursor(62, 0);
+    display.print(F("D:"));
+
+    if (object_detected == true)
+    {
+        display.print(distance_cm, 0);
+        display.print(F("cm"));
+    }
+    else
+    {
+        display.print(F("---"));
+    }
+}
+
+// ------------------------------------------------------------
+// Draw sweep line and object marker
+// ------------------------------------------------------------
+
+void draw_radar_sweep(float angle_deg, float distance_cm, bool object_detected)
+{
+    int sweep_x;
+    int sweep_y;
+
+    // Sweep line goes all the way to the outside of the radar grid
+    radar_point_from_radius(
+        angle_deg,
+        RADAR_RADIUS_PIXELS,
+        &sweep_x,
+        &sweep_y
+    );
+
+    display.drawLine(
+        RADAR_ORIGIN_X,
+        RADAR_ORIGIN_Y,
+        sweep_x,
+        sweep_y,
+        SSD1306_WHITE
+    );
+
+    // Draw object marker only if an object was detected
+    if (object_detected == true)
+    {
+        int object_x;
+        int object_y;
+
+        radar_point_from_distance(
+            angle_deg,
+            distance_cm,
+            &object_x,
+            &object_y
+        );
+
+        // Filled dot
+        display.fillCircle(object_x, object_y, 2, SSD1306_WHITE);
+
+        // Outer ring around the detected object
+        display.drawCircle(object_x, object_y, 4, SSD1306_WHITE);
+    }
+}
+
+// ------------------------------------------------------------
+// Main function you call whenever you want to update the OLED
+// ------------------------------------------------------------
+
+void radar_display_update(float angle_deg, float distance_cm, bool object_detected)
+{
+    angle_deg = clamp_float(angle_deg, 0.0f, 180.0f);
+
+    display.clearDisplay();
+
+    draw_radar_grid();
+    draw_radar_sweep(angle_deg, distance_cm, object_detected);
+    draw_radar_text(angle_deg, distance_cm, object_detected);
+
+    display.display();
+}
+
+// ------------------------------------------------------------
+// OLED init function
+// Call this once from your setup/init code
+// ------------------------------------------------------------
+
+void oled_init(void)
+{
+
+    // Initialise I2C  interface only  required no init()  for Arduino
+    // control as it reconfigues my Timer/Counter configurations.
+    
+    Wire.begin();           // Join I2C bus as master
+    Wire.setClock(100000);  // 100 kHz standard I2C speed
+    
+    if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)){
+
+        usart_send_string("OLED display init failed.\n");
+        while (1) {
+            
+        }
+    }
+
+    display.clearDisplay();
+    display.display();
+}
+
 
 
 // Original routine following Kai's demo codes.
