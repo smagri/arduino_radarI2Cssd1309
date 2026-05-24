@@ -207,6 +207,7 @@ void led_pwm_on(void);
 void led_pwm_off(void);
 void adc_init(void);
 uint8_t get_adc_to_oled_contrast(uint16_t adc_raw);
+void oled_set_contrast(uint8_t oled_contrast);
 
 //  OLED radar display functions:
 float clamp_float(float value, float minimum, float maximum);
@@ -218,6 +219,7 @@ void draw_radar_text(float angle_deg, float distance_cm, bool object_detected);
 void draw_radar_sweep(float angle_deg, float distance_cm, bool object_detected);
 void radar_display_update(float angle_deg, float distance_cm, bool object_detected);
 void oled_init(void);
+void oled_contrast_test(void);
 
 
 
@@ -677,7 +679,8 @@ int main(void){
     // the  whole of  init()  as this  interfers  with my  TC0/TC1/TC2
     // configurations.
     oled_init();
-
+    //oled_contrast_test();
+        
     // ADSC sets  the ADC to  start conversions.  Setting this  bit is
     // the  "software trigger"  that  tells the  hardware to  actually
     // begin the  electrical process  of sampling  the voltage  on the
@@ -712,6 +715,8 @@ int main(void){
         sei();
 
         oled_contrast =  get_adc_to_oled_contrast(adc_raw);
+        oled_set_contrast(oled_contrast);
+        
 
         if (usart_debugging_mode_adc){
             usart_send_string_flash(">adc_raw:");
@@ -826,12 +831,43 @@ uint8_t get_adc_to_oled_contrast(uint16_t adc_raw){
 }
 
 
+
+void oled_set_contrast(uint8_t oled_contrast)
+{
+    // contrast range: 0 to 255
+    display.ssd1306_command(SSD1306_SETCONTRAST);
+    display.ssd1306_command(oled_contrast);
+}
+
+void oled_contrast_test(void)
+{
+    display.clearDisplay();
+
+    // A mostly filled screen makes contrast changes much easier to see
+    display.fillRect(0, 0, 128, 64, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(10, 25);
+    display.print("CONTRAST TEST");
+    display.display();
+
+    while (1)
+    {
+        oled_set_contrast(1);      // very dim
+        _delay_ms(2000);
+
+        oled_set_contrast(255);    // brightest
+        _delay_ms(2000);
+    }
+}
+
+
 void led_pwm_on(void){
 
     // Connect OC0B/PD5 to Timer0 PWM output
     bitSet(TCCR0A, COM0B1);
     bitClear(TCCR0A, COM0B0);
 }
+
 
 
 void led_pwm_off(void)
@@ -847,13 +883,6 @@ void led_pwm_off(void)
 
 
 // Debugging USART functions //////////////////////////////////////////////////
-// void usart_clear_print(void){
-//     for (unsigned int i=0; i<500; i++) {
-//         usart_send_string("\n");
-//     }
-// }
-
-
 
 void usart_debugging(void){
 
