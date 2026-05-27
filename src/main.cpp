@@ -75,9 +75,11 @@
 
 // Drive from a angle greater than 0deg and less than 180deg, so we
 // don't overdirve servo.
-#define SERVO_MIN_ANGLE 15  // degrees
+// For testing:
+//#define SERVO_MIN_ANGLE 15  // degrees
 //#define SERVO_MAX_ANGLE 165 // degrees
-#define SERVO_MAX_ANGLE 165 // degrees
+#define SERVO_MIN_ANGLE 0  // degrees
+#define SERVO_MAX_ANGLE 180 // degrees
 
 #define ADC_MIN 0
 #define ADC_MAX 1023
