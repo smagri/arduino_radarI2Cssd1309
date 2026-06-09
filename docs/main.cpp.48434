@@ -3,11 +3,12 @@
 #endif // Set system clock frequency
 
 
-// Arduino libraries  for ssd1309 OLED  display, allowed to use  as it
+// Arduino libraries  for ssd1306 OLED  display, allowed to use  as it
 // was not covered in the course.
 #include <Arduino.h>
 #include <Wire.h>
-#include <U8g2lib.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 #include <math.h>
 
 #include <avr/io.h>
@@ -88,56 +89,37 @@
 
 // Radar display settings:
 //
-//#define SCREEN_WIDTH   128
-//#define SCREEN_HEIGHT  64
-//#define OLED_RESET     -1
+#define SCREEN_WIDTH   128
+#define SCREEN_HEIGHT  64
+#define OLED_RESET     -1
 #define SCREEN_ADDRESS 0x3C
 
-// U8g2 SSD1309 I2C constructor.
-// Uses small page buffer to save SRAM on Arduino Uno.
-// Preconfigured for a 128x64 pixel display
-U8G2_SSD1309_128X64_NONAME2_1_HW_I2C u8g2(
-    U8G2_R0,
-    U8X8_PIN_NONE
-);
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// If the screen stays blank or looks wrong, try this constructor instead:
-// U8G2_SSD1309_128X64_NONAME0_1_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+// Radar origin is at the bottom-centre of the OLED
+#define RADAR_ORIGIN_X 64
+#define RADAR_ORIGIN_Y 63
 
-
-// =============================================================
-// Radar display settings
-// =============================================================
-
-//#define OLED_I2C_ADDRESS        0x3C
-
-//#define RADAR_SCREEN_WIDTH      128
-//#define RADAR_SCREEN_HEIGHT     64
-
-#define RADAR_ORIGIN_X          64
-#define RADAR_ORIGIN_Y          63
-
-// Leave some top space for text.
-//#define RADAR_RADIUS            51
 // Leave some space at the top for angle/distance text
 #define RADAR_RADIUS_PIXELS 48
 
-// Change this to match your selected radar range.
-#define RADAR_MAX_DISTANCE_CM   100.0f
+// Maximum displayed radar distance
+//#define RADAR_MAX_DISTANCE_CM 100.0f
+#define RADAR_MAX_DISTANCE_CM 200.0f
 
-#define PI_FLOAT 3.14159265f    
+#define PI_FLOAT 3.14159265f
 
-// On an Arduino Uno, the SSD1309 128×64 display needs a 1024-byte RAM
+
+// On an Arduino Uno, the SSD1306 128×64 display needs a 1024-byte RAM
 // framebuffer.   Normal  variables,  USART buffer,  Adafruit  object,
 // stack, and  plain C string literals  all share the Uno’s  tiny 2 KB
-// SRAM.  If x.begin() cannot allocate  the display buffer, it returns
-// false, which sends the program oled_init() into failed mode and the
-// state machine  does not run.  This  uses an AVR technique  to store
-// the c string literals in flash not SRAM and avoid this problem.
+// SRAM.  If  display.begin() cannot  allocate the display  buffer, it
+// returns false, which sends the program oled_init() into failed mode
+// and the state machine does not  run.  This uses an AVR technique to
+// store  the c  string  literals in  flash not  SRAM  and avoid  this
+// problem.
 //    
 #define usart_send_string_flash(str) usart_send_string_flash_real(PSTR(str))
-
-
 
 /// / Total _time_ taken for the counter to count from 0->TOP-1 again.
 // // For the fast PWM TOP signal.
@@ -239,7 +221,6 @@ void adc_init(void);
 uint8_t get_adc_to_oled_contrast(uint16_t adc_raw);
 void oled_set_contrast(uint8_t oled_contrast);
 
-
 //  OLED radar display functions:
 float clamp_float(float value, float minimum, float maximum);
 void radar_point_from_radius(float angle_deg, float radius_pixels, int *x, int *y);
@@ -251,7 +232,7 @@ void draw_radar_sweep(float angle_deg, float distance_cm, bool object_detected);
 void radar_display_update(float angle_deg, float distance_cm, bool object_detected);
 void oled_init(void);
 void oled_contrast_test(void);
-void oled_clear(void);
+
 
 
 ISR(ADC_vect){
@@ -706,10 +687,9 @@ int main(void){
                 
     sei(); // Enable global interrupts
 
-    // Initalise U8g2  ssd1309 arduino librarys to  just configure I2C
-    // not the whole  of init() as this interfers  with my TC0/TC1/TC2
+    // Initalise adafruit  arduino librarys to just  configure I2C not
+    // the  whole of  init()  as this  interfers  with my  TC0/TC1/TC2
     // configurations.
-    
     oled_init();
     //oled_contrast_test();
         
@@ -785,7 +765,8 @@ int main(void){
 
             led_pwm_off();
 
-            oled_clear();
+            display.clearDisplay();
+            display.display();
     
             state_current = IDLE_MODE;
         }
@@ -821,9 +802,9 @@ int main(void){
                     cur_radar_distance_to_object_cm = 0.0f;
                 }
 
-                // Update ssd1309 OLED
+                // Update ssd1306 OLED
                 radar_display_update(cur_radar_angle, cur_radar_distance_to_object_cm,
-                                     object_detected);
+                                     true);
                 
                 state_current = SERVO_MODE;
                 break;
@@ -863,9 +844,38 @@ uint8_t get_adc_to_oled_contrast(uint16_t adc_raw){
     if (oled_contrast > 255) oled_contrast = 255;
 
         
-    return oled_contrast; // contrast value for ssd1309 is from 0->255
+    return oled_contrast; // contrast value for ssd1306 is from 0->255
 }
 
+
+
+void oled_set_contrast(uint8_t oled_contrast)
+{
+    // contrast range: 0 to 255
+    display.ssd1306_command(SSD1306_SETCONTRAST);
+    display.ssd1306_command(oled_contrast);
+}
+
+void oled_contrast_test(void)
+{
+    display.clearDisplay();
+
+    // A mostly filled screen makes contrast changes much easier to see
+    display.fillRect(0, 0, 128, 64, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(10, 25);
+    display.print("CONTRAST TEST");
+    display.display();
+
+    while (1)
+    {
+        oled_set_contrast(1);      // very dim
+        _delay_ms(2000);
+
+        oled_set_contrast(255);    // brightest
+        _delay_ms(2000);
+    }
+}
 
 
 void led_pwm_on(void){
@@ -1208,6 +1218,239 @@ float sonar(void){
     
     // return distance in cm for OLED and serial monitor display
     return (distance_to_object_cm);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//                        OLED radar display functions                       //
+///////////////////////////////////////////////////////////////////////////////
+
+// ------------------------------------------------------------
+// Helper: clamp a float value
+// ------------------------------------------------------------
+
+float clamp_float(float value, float minimum, float maximum)
+{
+    if (value < minimum)
+    {
+        return minimum;
+    }
+
+    if (value > maximum)
+    {
+        return maximum;
+    }
+
+    return value;
+}
+
+// ------------------------------------------------------------
+// Convert angle + pixel radius into OLED x/y position
+//
+// Angle convention:
+//     0 degrees   = right side
+//     90 degrees  = straight up
+//     180 degrees = left side
+// ------------------------------------------------------------
+
+void radar_point_from_radius(float angle_deg, float radius_pixels, int *x, int *y)
+{
+    float angle_rad = angle_deg * PI_FLOAT / 180.0f;
+
+    *x = RADAR_ORIGIN_X + (int)(radius_pixels * cos(angle_rad));
+    *y = RADAR_ORIGIN_Y - (int)(radius_pixels * sin(angle_rad));
+}
+
+// ------------------------------------------------------------
+// Convert angle + distance in cm into OLED x/y position
+// ------------------------------------------------------------
+
+void radar_point_from_distance(float angle_deg, float distance_cm, int *x, int *y)
+{
+    distance_cm = clamp_float(distance_cm, 0.0f, RADAR_MAX_DISTANCE_CM);
+
+    float radius_pixels =
+        (distance_cm / RADAR_MAX_DISTANCE_CM) * RADAR_RADIUS_PIXELS;
+
+    radar_point_from_radius(angle_deg, radius_pixels, x, y);
+}
+
+// ------------------------------------------------------------
+// Draw one semi-circle arc for the radar grid
+// ------------------------------------------------------------
+
+void draw_radar_arc(int radius_pixels)
+{
+    for (int angle = 0; angle <= 180; angle += 2)
+    {
+        int x;
+        int y;
+
+        radar_point_from_radius(angle, radius_pixels, &x, &y);
+
+        display.drawPixel(x, y, SSD1306_WHITE);
+    }
+}
+
+// ------------------------------------------------------------
+// Draw the fixed radar grid
+// ------------------------------------------------------------
+
+void draw_radar_grid(void)
+{
+    // Baseline
+    display.drawFastHLine(
+        RADAR_ORIGIN_X - RADAR_RADIUS_PIXELS,
+        RADAR_ORIGIN_Y,
+        RADAR_RADIUS_PIXELS * 2,
+        SSD1306_WHITE
+    );
+
+    // Distance arcs
+    draw_radar_arc(RADAR_RADIUS_PIXELS / 3);
+    draw_radar_arc((RADAR_RADIUS_PIXELS * 2) / 3);
+    draw_radar_arc(RADAR_RADIUS_PIXELS);
+
+    // Angle lines every 30 degrees
+    for (int angle = 0; angle <= 180; angle += 30)
+    {
+        int x;
+        int y;
+
+        radar_point_from_radius(angle, RADAR_RADIUS_PIXELS, &x, &y);
+
+        display.drawLine(
+            RADAR_ORIGIN_X,
+            RADAR_ORIGIN_Y,
+            x,
+            y,
+            SSD1306_WHITE
+        );
+    }
+
+    // Centre point
+    display.fillCircle(RADAR_ORIGIN_X, RADAR_ORIGIN_Y, 2, SSD1306_WHITE);
+}
+
+// ------------------------------------------------------------
+// Draw angle and distance text at the top of the OLED
+// ------------------------------------------------------------
+
+void draw_radar_text(float angle_deg, float distance_cm, bool object_detected)
+{
+    // Clear text area
+    display.fillRect(0, 0, SCREEN_WIDTH, 10, SSD1306_BLACK);
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setCursor(0, 0);
+    display.print(F("A:"));
+    display.print((int)angle_deg);
+    display.print(F("deg"));
+
+    display.setCursor(62, 0);
+    display.print(F("D:"));
+
+    if (object_detected == true)
+    {
+        display.print(distance_cm, 0);
+        display.print(F("cm"));
+    }
+    else
+    {
+        display.print(F("---"));
+    }
+}
+
+// ------------------------------------------------------------
+// Draw sweep line and object marker
+// ------------------------------------------------------------
+
+void draw_radar_sweep(float angle_deg, float distance_cm, bool object_detected)
+{
+    int sweep_x;
+    int sweep_y;
+
+    // Sweep line goes all the way to the outside of the radar grid
+    radar_point_from_radius(
+        angle_deg,
+        RADAR_RADIUS_PIXELS,
+        &sweep_x,
+        &sweep_y
+    );
+
+    display.drawLine(
+        RADAR_ORIGIN_X,
+        RADAR_ORIGIN_Y,
+        sweep_x,
+        sweep_y,
+        SSD1306_WHITE
+    );
+
+    // Draw object marker only if an object was detected
+    if (object_detected == true)
+    {
+        int object_x;
+        int object_y;
+
+        radar_point_from_distance(
+            angle_deg,
+            distance_cm,
+            &object_x,
+            &object_y
+        );
+
+        // Filled dot
+        display.fillCircle(object_x, object_y, 2, SSD1306_WHITE);
+
+        // Outer ring around the detected object
+        display.drawCircle(object_x, object_y, 4, SSD1306_WHITE);
+    }
+}
+
+// ------------------------------------------------------------
+// Main function you call whenever you want to update the OLED
+// ------------------------------------------------------------
+
+void radar_display_update(float angle_deg, float distance_cm, bool object_detected)
+{
+    angle_deg = clamp_float(angle_deg, 0.0f, 180.0f);
+
+    display.clearDisplay();
+
+    draw_radar_grid();
+    draw_radar_sweep(angle_deg, distance_cm, object_detected);
+    draw_radar_text(angle_deg, distance_cm, object_detected);
+
+    display.display();
+}
+
+// ------------------------------------------------------------
+// OLED init function
+// Call this once from your setup/init code
+// ------------------------------------------------------------
+
+void oled_init(void)
+{
+
+    // Initialise I2C  interface only  required no init()  for Arduino
+    // control as it reconfigues my Timer/Counter configurations.
+    
+    Wire.begin();           // Join I2C bus as master
+    Wire.setClock(100000);  // 100 kHz standard I2C speed
+    
+    if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)){
+
+        usart_send_string_flash("OLED display init failed rest of state machine"
+                                " will not execute.\n");
+
+        while (1) {
+            
+        }
+    }
+
+    display.clearDisplay();
+    display.display();
 }
 
 
@@ -1562,303 +1805,4 @@ void usart_send_num(float num, char num_int, char num_decimal){
     str[num_int+num_decimal+1] = '\0';
     usart_send_string(str);
         
-}
-
-
-
-///////////////////////////////////////////////////////////////////////////////
-//                        OLED ssd1309 radar display functions               //
-///////////////////////////////////////////////////////////////////////////////
-
-float clamp_float(float value, float minimum, float maximum)
-{
-    if (value < minimum)
-    {
-        return minimum;
-    }
-
-    if (value > maximum)
-    {
-        return maximum;
-    }
-
-    return value;
-}
-
-
-// Angle convention:
-//
-// 0 degrees   = right side
-// 90 degrees  = straight up
-// 180 degrees = left side
-void radar_point_from_radius(float angle_deg, float radius_pixels, int *x, int *y)
-{
-    float angle_rad = angle_deg * PI_FLOAT / 180.0f;
-
-    *x = RADAR_ORIGIN_X + (int)(radius_pixels * cos(angle_rad));
-    *y = RADAR_ORIGIN_Y - (int)(radius_pixels * sin(angle_rad));
-}
-
-
-void radar_point_from_distance(float angle_deg, float distance_cm, int *x, int *y)
-{
-    distance_cm = clamp_float(distance_cm, 0.0f, RADAR_MAX_DISTANCE_CM);
-
-    float radius_pixels =
-        (distance_cm / RADAR_MAX_DISTANCE_CM) * RADAR_RADIUS_PIXELS;
-
-    radar_point_from_radius(angle_deg, radius_pixels, x, y);
-}
-
-
-void draw_radar_arc(int radius_pixels)
-{
-    int prev_x;
-    int prev_y;
-
-    radar_point_from_radius(0.0f, radius_pixels, &prev_x, &prev_y);
-
-    for (int angle = 2; angle <= 180; angle += 2)
-    {
-        int x;
-        int y;
-
-        radar_point_from_radius((float)angle, radius_pixels, &x, &y);
-
-        u8g2.drawLine(prev_x, prev_y, x, y);
-
-        prev_x = x;
-        prev_y = y;
-    }
-}
-
-
-void draw_angle_label(int angle_deg)
-{
-    char text[5];
-
-    snprintf(text, sizeof(text), "%d", angle_deg);
-
-    int x;
-    int y;
-
-    // Put labels slightly inside the outer arc.
-    radar_point_from_radius(
-        (float)angle_deg,
-        // orig: angles inside radar grid RADAR_RADIUS_PIXELS - 8,
-        RADAR_RADIUS_PIXELS + 6,
-        &x,
-        &y
-    );
-
-    int text_width = u8g2.getStrWidth(text);
-
-    x = x - (text_width / 2);
-
-    // Small corrections so labels do not hit the screen edge.
-    if (angle_deg == 0)
-    {
-        x -= 1;
-        y -= 3;
-    }
-    else if (angle_deg == 180)
-    {
-        x += 1;
-        y -= 3;
-    }
-    else if (angle_deg == 90)
-    {
-        y += 7;
-    }
-    else
-    {
-        y += 3;
-    }
-
-    u8g2.drawStr(x, y, text);
-}
-
-
-void draw_radar_grid(void)
-{
-    // Baseline
-    u8g2.drawHLine(
-        RADAR_ORIGIN_X - RADAR_RADIUS_PIXELS,
-        RADAR_ORIGIN_Y,
-        RADAR_RADIUS_PIXELS * 2
-    );
-
-    // Distance arcs
-    draw_radar_arc(RADAR_RADIUS_PIXELS / 3);
-    draw_radar_arc((RADAR_RADIUS_PIXELS * 2) / 3);
-    draw_radar_arc(RADAR_RADIUS_PIXELS);
-
-    u8g2.setFont(u8g2_font_4x6_tr);
-
-    // Angle sweep/grid lines every 30 degrees
-    for (int angle = 0; angle <= 180; angle += 30)
-    {
-        int x;
-        int y;
-
-        radar_point_from_radius(
-            (float)angle,
-            RADAR_RADIUS_PIXELS,
-            &x,
-            &y
-        );
-
-        u8g2.drawLine(
-            RADAR_ORIGIN_X,
-            RADAR_ORIGIN_Y,
-            x,
-            y
-        );
-
-        draw_angle_label(angle);
-    }
-
-    // Centre point
-    u8g2.drawDisc(RADAR_ORIGIN_X, RADAR_ORIGIN_Y, 2);
-}
-
-
-
-void draw_radar_text(float angle_deg, float distance_cm, bool object_detected)
-{
-    char text[24];
-
-    u8g2.setFont(u8g2_font_5x7_tr);
-
-    // Left side: Angle:180 plus manually drawn degree symbol
-    snprintf(text, sizeof(text), "Angle:%3d", (int)angle_deg);
-    u8g2.drawStr(0, 7, text);
-
-    // Draw degree symbol manually as a tiny circle.
-    // This avoids UTF-8/font problems.
-    int degree_x = u8g2.getStrWidth(text) + 2;
-    u8g2.drawCircle(degree_x, 2, 1);
-
-    // Right side: Range value
-    if (object_detected == true)
-    {
-        snprintf(text, sizeof(text), "Range:%3dcm", (int)distance_cm);
-    }
-    else
-    {
-        snprintf(text, sizeof(text), "Range:---");
-    }
-
-    u8g2.drawStr(65, 7, text);
-}
-
-
-
-void draw_radar_sweep(float angle_deg, float distance_cm, bool object_detected)
-{
-    int sweep_x;
-    int sweep_y;
-
-    radar_point_from_radius(
-        angle_deg,
-        RADAR_RADIUS_PIXELS,
-        &sweep_x,
-        &sweep_y
-    );
-
-    // Current sweep line
-    u8g2.drawLine(
-        RADAR_ORIGIN_X,
-        RADAR_ORIGIN_Y,
-        sweep_x,
-        sweep_y
-    );
-
-    if (object_detected == true)
-    {
-        int object_x;
-        int object_y;
-
-        radar_point_from_distance(
-            angle_deg,
-            distance_cm,
-            &object_x,
-            &object_y
-        );
-
-        // Filled dot
-        u8g2.drawDisc(object_x, object_y, 2);
-
-        // Outer ring
-        u8g2.drawCircle(object_x, object_y, 4);
-    }
-}
-
-
-void radar_display_update(float angle_deg, float distance_cm, bool object_detected)
-{
-    angle_deg = clamp_float(angle_deg, 0.0f, 180.0f);
-
-    u8g2.firstPage();
-
-    do
-    {
-        draw_radar_grid();
-        draw_radar_sweep(angle_deg, distance_cm, object_detected);
-        draw_radar_text(angle_deg, distance_cm, object_detected);
-
-    } while (u8g2.nextPage());
-}
-
-
-void oled_clear(void)
-{
-    u8g2.firstPage();
-
-    do
-    {
-        // Draw nothing. This clears the screen.
-    } while (u8g2.nextPage());
-}
-
-
-// ------------------------------------------------------------
-// OLED init function
-// Call this once from your setup/init code
-// ------------------------------------------------------------
-void oled_init(void)
-{
-    Wire.begin();
-    Wire.setClock(100000UL);
-
-    // U8g2 expects the 8-bit I2C address.
-    // 7-bit address 0x3C becomes 0x78.
-    u8g2.setI2CAddress(SCREEN_ADDRESS << 1);
-
-    u8g2.begin();
-    u8g2.enableUTF8Print();
-
-    // Contrast range is usually 0 to 255.
-    u8g2.setContrast(180);
-
-    oled_clear();
-}
-
-
-void oled_set_contrast(uint8_t oled_contrast)
-{
-    u8g2.setContrast(oled_contrast);
-}
-
-
-void oled_contrast_test(void)
-{
-    while (1)
-    {
-        u8g2.setContrast(1);
-        my_delay_us(2000000UL);
-
-        u8g2.setContrast(255);
-        my_delay_us(2000000UL);
-    }
 }
