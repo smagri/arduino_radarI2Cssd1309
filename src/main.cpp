@@ -61,7 +61,8 @@
 // TC2 tick_period = 1/F
 // So TC2 tick period = prescaler/F_CPU
 // Prescaler 8 gives good resolution for TC2 tick period as 8/16MHz = 0.5us
-#define prescalerTC2 8
+//#define prescalerTC2 8
+#define prescalerTC2 64
 #define prescalerTC0 8
 
 
@@ -174,6 +175,11 @@ volatile bool flag_system_stop = 0;
 
 // Current ADC value read in ADC_vect ISR.
 volatile uint16_t adc_cur = 0;
+
+// Counts the number  of ms, each 1ms  is a CTC compare  match of TC2.
+// Where TC2 prescaler is 64.
+volatile uint32_t system_time_ms = 0;
+
 
 // Our program buffer  that stores TX/RX data for the  Arduino that we
 // want to transmit from MCU->PC or recive data from the PC->MCU.
@@ -333,10 +339,14 @@ ISR(INT1_vect){
 
 
 // Timer2 overflow, which is really compare match A overflows in CTC mode.
+// ISR(TIMER2_COMPA_vect)
+// {
+//     num_timer2_overflows++;
+//     //num_timer2_compare_matches++;
+// }
 ISR(TIMER2_COMPA_vect)
 {
-    num_timer2_overflows++;
-    //num_timer2_compare_matches++;
+    system_time_ms++;
 }
 
 
@@ -396,52 +406,116 @@ ISR(TIMER1_CAPT_vect)
 
 
 
+// void config_tc2(void)
+// {
+    
+//     // Configure Timer/Counter2 in CTC mode.
+
+//     // Mode: CTC, TOP = OCR2A
+    
+//     // Stop Timer 2 while we configure it for safety.
+//     stop_tc2;
+
+//     // Normal port operation, CTC mode selected using WGM21 = 1
+//     TCCR2A = 0;
+//     TCCR2B = 0;
+
+//     // CTC mode: WGM22:0 = 010
+//     // WGM22 is in TCCR2B, WGM21 and WGM20 are in TCCR2A
+//     TCCR2A |= (1 << WGM21);
+
+//     // Set TOP value for CTC mode
+//     OCR2A = 255;
+
+//     // Start counter from 0
+//     TCNT2 = 0;
+
+//     // Clear pending compare-match A flag
+//     TIFR2 = (1 << OCF2A);
+
+//     period_of_tick_tc2 = 1.0f/(float)(F_CPU/prescalerTC2);
+    
+//     // timer2_overflow_time_us=(total_number_of_ticks * period_of_tick) * 1.0e6
+//     //
+//     // In our fast PWM TOP mode the timer/counter counts as such:
+//     //
+//     // 0 -> 1 -> 2 -> ... -> TOP -> 0 -> 1 -> ...,
+//     //
+//     // Note that the the reset to 0 is part of the cycle, resulting in
+//     // TOP+1 transitions for the period.
+//     //
+//     timer2_overflow_time_us = ((float)OCR2A + 1.0f) * period_of_tick_tc2 * 1.0e6;
+     
+//     // Disable compare-match interrupt initially
+//     disable_tc2_interrupt;
+
+//     // Start Timer2
+//     start_tc2;
+// }
 void config_tc2(void)
 {
-    
-    // Configure Timer/Counter2 in CTC mode.
+    /*
+     * Configure Timer/Counter2 as a 1 ms system tick timer.
+     *
+     * Mode: CTC
+     * TOP:  OCR2A
+     *
+     * F_CPU = 16 MHz
+     * Prescaler = 64
+     *
+     * Timer clock frequency(f) = 16 MHz / 64 = 250 kHz
+     * Timer tick(period of one tick=(1/f))  = 4 us
+     *
+     * For 1 ms CTC period:
+     *
+     * 1 ms(Toverflow) = (OCR2A + 1) × 4 µs
+     * OCR2A + 1 = 1000 / 4
+     * OCR2A + 1 = 250
+     * OCR2A = 249
+     * OCR2A = 249 because the counter counts from 0 to OCR2A
+     */
 
-    // Mode: CTC, TOP = OCR2A
-    
-    // Stop Timer 2 while we configure it for safety.
-    stop_tc2;
+    // Stop Timer2 while configuring it.
+    // Clear CS22:CS20 bits.
+    TCCR2B &= ~((1 << CS22) | (1 << CS21) | (1 << CS20));
 
-    // Normal port operation, CTC mode selected using WGM21 = 1
+    // Clear Timer2 control registers.
     TCCR2A = 0;
     TCCR2B = 0;
 
     // CTC mode: WGM22:0 = 010
-    // WGM22 is in TCCR2B, WGM21 and WGM20 are in TCCR2A
+    // WGM21 is in TCCR2A.
     TCCR2A |= (1 << WGM21);
 
-    // Set TOP value for CTC mode
-    OCR2A = 255;
+    
+    // Set compare  value for  1 ms interrupt.   That is,  CTC compare
+    // match every 1ms.
+    //
+    // See subject notes for CTC mode, where T_tick=period of one tick
+    // Toverflow = (OCR2A+1) * T_tick
+    // Toverflow/T_tick = (OCR2A+1)
+    //
+    // Remember from above Toverflow=1ms is required:
+    // OCR2A = ((Toverflow/T_tick) - 1)
+    // OCR2A = (0.001s / (prescaler/F_CPU)) - 1
+    // OCR2A = ((1/1000s * F_CPU) / prescaler) - 1
+    OCR2A = (uint8_t)((F_CPU / prescalerTC2 / 1000UL) - 1);
 
-    // Start counter from 0
+    // Start counting from 0.
     TCNT2 = 0;
 
-    // Clear pending compare-match A flag
+    // Clear any pending Timer2 compare match A flag.
+    // Interrupt flags are cleared by writing a 1 to them.
     TIFR2 = (1 << OCF2A);
 
-    period_of_tick_tc2 = 1.0f/(float)(F_CPU/prescalerTC2);
-    
-    // timer2_overflow_time_us=(total_number_of_ticks * period_of_tick) * 1.0e6
-    //
-    // In our fast PWM TOP mode the timer/counter counts as such:
-    //
-    // 0 -> 1 -> 2 -> ... -> TOP -> 0 -> 1 -> ...,
-    //
-    // Note that the the reset to 0 is part of the cycle, resulting in
-    // TOP+1 transitions for the period.
-    //
-    timer2_overflow_time_us = ((float)OCR2A + 1.0f) * period_of_tick_tc2 * 1.0e6;
-     
-    // Disable compare-match interrupt initially
-    disable_tc2_interrupt;
+    // Enable Timer2 compare match A interrupt.
+    TIMSK2 |= (1 << OCIE2A);
 
-    // Start Timer2
-    start_tc2;
+    // Start Timer2 with prescaler = 64.
+    // For Timer2: CS22:CS21:CS20 = 100 gives prescaler /64.
+    TCCR2B |= (1 << CS22);
 }
+
 
 
 void config_tc1(void)

@@ -1,0 +1,2 @@
+I am using INT1 which can also be used as PWM output to OC2B.  Is that
+still ok, to use TC2 that is?
