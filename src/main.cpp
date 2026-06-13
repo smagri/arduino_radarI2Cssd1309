@@ -235,7 +235,8 @@ void config_tc2(void);
 void config_tc1(void);
 void config_tc0(void);
 void interrupt_init(void);
-void my_delay_us(unsigned long x);
+void my_delay_us(uint16_t delay_us);
+//void my_delay_us(unsigned long x);
 float sonar(void);
 float drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
@@ -1288,46 +1289,148 @@ float sonar(void){
 
 // Original routine following Kai's demo codes.
 //
-void my_delay_us(unsigned long x){
+// void my_delay_us(unsigned long x){
 
-    // Delays, determined with a hardware timer/counter for x us.
+//     // Delays, determined with a hardware timer/counter for x us.
 
-    // This  version  of  my_delay_us()  is limited  by  the  size  of
-    // unsigned long. Hence x_max=2^32-1=4,294,967,295 us=4,294.967295
-    // s=71.5828 minutes=1.193hours
+//     // This  version  of  my_delay_us()  is limited  by  the  size  of
+//     // unsigned long. Hence x_max=2^32-1=4,294,967,295 us=4,294.967295
+//     // s=71.5828 minutes=1.193hours
     
     
-    // NOTE: that a float assigned  to an integer returns the interger
-    // value with no decimal pont values.
+//     // NOTE: that a float assigned  to an integer returns the interger
+//     // value with no decimal pont values.
         
-    // Number of complete Timer2 overflow periods needed.
-    unsigned long num_complete_overflows = ( (float)x / timer2_overflow_time_us );
+//     // Number of complete Timer2 overflow periods needed.
+//     unsigned long num_complete_overflows = ( (float)x / timer2_overflow_time_us );
 
-    // Remaining time after complete overflows, in microseconds.
-    float remainder_time_us =
-        (  (float)x - ((float)num_complete_overflows*timer2_overflow_time_us) );
+//     // Remaining time after complete overflows, in microseconds.
+//     float remainder_time_us =
+//         (  (float)x - ((float)num_complete_overflows*timer2_overflow_time_us) );
 
-    // Convert remaining time into Timer2 ticks.
-    unsigned char remainder_time_ticks =
-        ( remainder_time_us / (period_of_tick_tc2 * 1.0e6) );
+//     // Convert remaining time into Timer2 ticks.
+//     unsigned char remainder_time_ticks =
+//         ( remainder_time_us / (period_of_tick_tc2 * 1.0e6) );
 
-    //  Delay for complete number of overflows of Timer2
-    if (num_complete_overflows > 0){
-        num_timer2_overflows = 0;
-        TCNT2 = 0;
+//     //  Delay for complete number of overflows of Timer2
+//     if (num_complete_overflows > 0){
+//         num_timer2_overflows = 0;
+//         TCNT2 = 0;
 
-        // // TODO: Test  Clears  and pending  overflow flag  so the  ISR doen't  run
-        // immediately and have the delay overflow too short.
-        //TIFR2 = (1 << TOV2);
+//         // // TODO: Test  Clears  and pending  overflow flag  so the  ISR doen't  run
+//         // immediately and have the delay overflow too short.
+//         //TIFR2 = (1 << TOV2);
 
-        enable_tc2_interrupt;
-        while (num_timer2_overflows < num_complete_overflows);
-        disable_tc2_interrupt;
+//         enable_tc2_interrupt;
+//         while (num_timer2_overflows < num_complete_overflows);
+//         disable_tc2_interrupt;
+//     }
+
+//     // Delay for remainder number of ticks
+//     TCNT2 = 0;
+//     while (TCNT2 < remainder_time_ticks);
+// }
+void my_delay_us(uint16_t delay_us)
+{
+
+    // Blocking microsecond delay using Timer2's current counter value.
+    // 
+    // IMPORTANT: This function  does NOT create a true  1 us hardware
+    // timer tick.  It just determines the closest multiple of 4us the
+    // for the delay_us required, thus  the resolution of this routine
+    // is 4us,  4us being Ttick, ie  period of one timer  tick.  Given
+    // prescaler is 64 and F_CPU=16Mkz.
+    //
+    // it F = F_CPU/prescaler
+    // Ttick = prescaler/ F_CPU = 64/16x10^6 = 4us
+    //
+    // As stated earlier That means  the requested delay is rounded UP
+    // to the next available 4 us Timer2 tick.
+    //
+    //
+    // Also, this function should still  only be used for short delays
+    // as it still is a busy wait algorithim.  For long delays, us the
+    // 1  ms system  tick as  waiting  1ms for  the ISR  to occur  and
+    // comparing TCNT2 values  is not a busy wait delay,  as you would
+    // be  just  asking  has  enough  time  passed  yet  as  the  only
+    // calculation.  For  longer delays, interrupts or  other code can
+    // cause the  loop to miss  Timer2 count  changes. If it  misses a
+    // change, the function does not know  it missed one; it only sees
+    // that the value is different.   So long delays may become longer
+    // than expected.
+
+    // If the requested delay is 0 us, do nothing.
+    if (delay_us == 0){
+        return;
     }
 
-    // Delay for remainder number of ticks
-    TCNT2 = 0;
-    while (TCNT2 < remainder_time_ticks);
+
+    // Therefore,  as calculated  earlier Ttick_us  = Ttick*1000000UL.
+    // However we write it this way due to integer division truncating
+    // the decimal point so we do the multiplication first.
+    // 
+    // ie      Ttick_us=1/F=0.000004*10^6=(prescaler/F_CPU)*1000000UL,
+    // integer division  would happen first and  would make 0.000004=0
+    // thus Ttick = 0*1000000UL.
+    //
+    // So we write it like this, to avoid this problem:
+    const uint8_t TC2_TICK_US = (uint8_t)((prescalerTC2 * 1000000UL) / F_CPU);
+
+
+    // Convert the requested microsecond delay into Timer2 counter ticks.
+    //
+    // Because Timer2 only advances once every 4 us, we must round UP.
+    //
+    // Mathematical trick for rounding up is used here.
+    //
+    // The formula:
+    //
+    // required_ticks = (delay_us + TC2_TICK_US - 1) / TC2_TICK_US
+    //
+    // Examples, remember  interger division drops the  decimal point
+    // without any rounding:
+    //
+    //       my_delay_us(1)   -> waits about 4 us
+    //       my_delay_us(4)   -> waits about 4 us
+    //       my_delay_us(5)   -> waits about 8 us
+    //       my_delay_us(8)   -> waits about 8 us
+    //       my_delay_us(11)  -> waits about 12 us
+    //       my_delay_us(12)  -> waits about 12 us
+    uint16_t required_ticks = (delay_us + TC2_TICK_US - 1) / TC2_TICK_US;
+
+    
+    // This variable  counts how  many Timer2 counter  increments have
+    // passed.   It  is  uint16_t  rather than  uint8_t  so  that  the
+    // function can  delay for more  than 255 Timer2 ticks  if needed.
+    //
+    uint16_t ticks_done = 0;
+
+    // Read  the  current value  of  the  Timer2 counter.   Timer2  is
+    // already running because config_tc2() started it.
+    uint8_t previous_count = TCNT2;
+
+
+    // Wait until enough Timer2  counter increments have occurred(one
+    // counter tick is about 4us with the current prescaler chosen).
+    while (ticks_done < required_ticks)
+    {
+        uint8_t current_count = TCNT2;
+
+        // If TCNT2 has changed since the previous read, then at least
+        // one Timer2 tick has passed.
+        // 
+        // If an interrupt happens during this function, the delay may
+        // become slightly  longer, but that  is okay for  the HC-SR04
+        // trigger pulse  because the pulse  needs to be at  least the
+        // required length.
+        // 
+        if (current_count != previous_count)
+        {
+            previous_count = current_count;
+            ticks_done++;
+        }
+    }
+    
 }
 
 
