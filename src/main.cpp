@@ -318,11 +318,20 @@ ISR(INT0_vect){
     
     // crude debouncing // TODO: implement proper debounceing code.
 
-    // causes deadlock  because it blocks  forever as we are  int this
-    // ISR and this ISR can  thus not be retriggered and my_delay_ms()
-    // depends on this ISR to be running.
+    // On the ATmega328P,  when an interrupt starts,  the AVR hardware
+    // automatically clears the global interrupt  enable bit, the I bit
+    // in  SREG.   That  means  while  you are  inside  an  ISR,  other
+    // interrupts  are   normally  blocked  until  the   ISR  finishes.
+    // Microchip’s datasheet  says that  when an interrupt  occurs, the
+    // global  interrupt  enable I  bit  is  cleared, and  that  nested
+    // interrupts only  happen if  user software sets  the I  bit again
+    // during the ISR.
+    //
+    // So TC2  interrupts can't  happen within  another ISR.   So this
+    // does not work.
     //
     // my_delay_ms(10);
+
     
     _delay_ms(10);
     if (!bitRead(PIND, pin_int0_interrupt))
@@ -346,6 +355,19 @@ ISR(INT1_vect){
     // causes deadlock because it blocks forever as we are in this ISR
     // and  thus TC2  ISR  can not  be  retriggered and  my_delay_ms()
     // depends on TC2 ISR to be running.
+    //
+
+    // On the ATmega328P,  when an interrupt starts,  the AVR hardware
+    // automatically clears the global interrupt  enable bit, the I bit
+    // in  SREG.   That  means  while  you are  inside  an  ISR,  other
+    // interrupts  are   normally  blocked  until  the   ISR  finishes.
+    // Microchip’s datasheet  says that  when an interrupt  occurs, the
+    // global  interrupt  enable I  bit  is  cleared, and  that  nested
+    // interrupts only  happen if  user software sets  the I  bit again
+    // during the ISR.
+    //
+    // So TC2  interrupts can't  happen within  another ISR.   So this
+    // does not work.
     //
     // my_delay_ms(10);
 
