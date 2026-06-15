@@ -10,11 +10,14 @@
 #include <U8g2lib.h>
 #include <math.h>
 
+// note _delay_us/ms() not used anymore
 #include <avr/io.h>
-#include <util/delay.h>
 #include <avr/interrupt.h>
-#include <stdlib.h>
 #include <avr/pgmspace.h>
+#include <util/atomic.h>
+#include <util/delay.h>
+#include <stdlib.h>
+#include <stdint.h>
 
 
 
@@ -237,6 +240,7 @@ void config_tc0(void);
 void interrupt_init(void);
 void my_delay_us(uint16_t delay_us);
 //void my_delay_us(unsigned long x);
+void my_delay_ms(uint32_t delay_ms);
 float sonar(void);
 float drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
@@ -312,7 +316,14 @@ ISR(INT0_vect){
     // operation.   INT1 ISR  has been  configured to  be triggerd  on
     // falling edge, ie high to low, when the button is pressed.
     
-     // crude debouncing // TODO: implement proper debounceing code.
+    // crude debouncing // TODO: implement proper debounceing code.
+
+    // causes deadlock  because it blocks  forever as we are  int this
+    // ISR and this ISR can  thus not be retriggered and my_delay_ms()
+    // depends on this ISR to be running.
+    //
+    // my_delay_ms(10);
+    
     _delay_ms(10);
     if (!bitRead(PIND, pin_int0_interrupt))
         flag_system_stop = 1;
@@ -330,8 +341,16 @@ ISR(INT1_vect){
     // configured to be triggerd on falling edge, ie high to low, when
     // the button is pressed.
     
-     // crude debouncing // TODO: implement proper debounceing code.
+    // crude debouncing // TODO: implement proper debounceing code.
+
+    // causes deadlock because it blocks forever as we are in this ISR
+    // and  thus TC2  ISR  can not  be  retriggered and  my_delay_ms()
+    // depends on TC2 ISR to be running.
+    //
+    // my_delay_ms(10);
+
     _delay_ms(10);
+    
     if (!bitRead(PIND, pin_int1_interrupt))
         flag_system_start = 1;
 
@@ -407,52 +426,6 @@ ISR(TIMER1_CAPT_vect)
 
 
 
-// void config_tc2(void)
-// {
-    
-//     // Configure Timer/Counter2 in CTC mode.
-
-//     // Mode: CTC, TOP = OCR2A
-    
-//     // Stop Timer 2 while we configure it for safety.
-//     stop_tc2;
-
-//     // Normal port operation, CTC mode selected using WGM21 = 1
-//     TCCR2A = 0;
-//     TCCR2B = 0;
-
-//     // CTC mode: WGM22:0 = 010
-//     // WGM22 is in TCCR2B, WGM21 and WGM20 are in TCCR2A
-//     TCCR2A |= (1 << WGM21);
-
-//     // Set TOP value for CTC mode
-//     OCR2A = 255;
-
-//     // Start counter from 0
-//     TCNT2 = 0;
-
-//     // Clear pending compare-match A flag
-//     TIFR2 = (1 << OCF2A);
-
-//     period_of_tick_tc2 = 1.0f/(float)(F_CPU/prescalerTC2);
-    
-//     // timer2_overflow_time_us=(total_number_of_ticks * period_of_tick) * 1.0e6
-//     //
-//     // In our fast PWM TOP mode the timer/counter counts as such:
-//     //
-//     // 0 -> 1 -> 2 -> ... -> TOP -> 0 -> 1 -> ...,
-//     //
-//     // Note that the the reset to 0 is part of the cycle, resulting in
-//     // TOP+1 transitions for the period.
-//     //
-//     timer2_overflow_time_us = ((float)OCR2A + 1.0f) * period_of_tick_tc2 * 1.0e6;
-     
-//     // Disable compare-match interrupt initially
-//     disable_tc2_interrupt;
-
-//     // Start Timer2
-//     start_tc2;
-// }
 void config_tc2(void)
 {
     /*
@@ -781,6 +754,7 @@ int main(void){
                 
     sei(); // Enable global interrupts
 
+
     // Initalise U8g2  ssd1309 arduino librarys to  just configure I2C
     // not the whole  of init() as this interfers  with my TC0/TC1/TC2
     // configurations.
@@ -796,7 +770,7 @@ int main(void){
     // conversion mode  as the  conversion occurs  only once  for each
     // time ADSC is set.
     bitSet(ADCSRA, ADSC);
-    my_delay_us(10000UL);
+    my_delay_ms(10UL);
     
     //usart_send_string("dbg: in INIT_FINISHED\n");
 
@@ -807,7 +781,31 @@ int main(void){
     
     state_current = IDLE_MODE;
 
+    // Debugging my_delay_us() to use in HC-SR04 trigger pulse
+    //
+    // This gives a pulse high of  about 11.90-12.40us and a pulse low
+    // of  31.8-32.2us.  Range  probably due  to interrupts  happening
+    // during pulse generation.
+    //
+    // bitClear(PORTC, pin_trigger);
+    // my_delay_us(2UL);
+    // while (1) {
+    //     bitSet(PORTC, pin_trigger);
+    //     my_delay_us(11UL);
+    //     bitClear(PORTC, pin_trigger);
+    //     my_delay_us(30UL);
+    // }
 
+    // Debugging my_delay_ms(). This produces a pulse high and low of 1ms
+    // bitClear(PORTC, pin_trigger);
+    // my_delay_ms(2UL);
+    // while (1) {
+    //      bitSet(PORTC, pin_trigger);
+    //      my_delay_ms(1);
+    //      bitClear(PORTC, pin_trigger);
+    //      my_delay_ms(1);
+    // }
+    
     while (1){
 
         usart_debugging();
@@ -872,7 +870,7 @@ int main(void){
             case IDLE_MODE: {
 
                 //usart_send_string("dbg: in IDLE_MODE\n");
-                my_delay_us(1000000UL);
+                //my_delay_ms(1000UL);
 
                 break;
             }
@@ -921,7 +919,51 @@ int main(void){
 ///////////////////////////////////////////////////////////////////////////////
 //                           User defined functions                          //
 ///////////////////////////////////////////////////////////////////////////////
-   
+ uint32_t get_system_time_ms(void)
+{
+
+    // Helper function to read system_time_ms atomically as it is a 32
+    // bit value and the  MCU is 8-bit thus can be  updated by the ISR
+    // while main() is reading it.  So  the MCU can't read all 4 bytes
+    // in one single  machine operation.  It has to  read the variable
+    // byte by byte.
+    
+    uint32_t time_copy;
+
+    // Save  current interrupt  state, temporarily  disable interrupts
+    // while  the variable  is copied  and then  restor the  interrupt
+    // state.
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+    {
+        time_copy = system_time_ms;
+    }
+
+    return time_copy;
+}
+
+
+
+void my_delay_ms(uint32_t delay_ms)
+{
+
+    // Efficient    ms    delay     routine,    using    TIMER2    ISR
+    // (TIMER2_COMPA_vect) as 1ms compare match routine.
+
+    
+    uint32_t start_time = get_system_time_ms();
+
+    // while  loop condition  calculates the  elapsed time  since this
+    // function got called. system_time_ms overflows can give sperious
+    // results.
+    //
+    while ((uint32_t)(get_system_time_ms() - start_time) < delay_ms)
+    {
+        // Wait here until enough milliseconds have passed.
+        // Do not disable interrupts in this loop.
+    }
+}
+
+
 uint8_t get_adc_to_oled_contrast(uint16_t adc_raw){
 
     // Single conversion mode is active, so conversion only occurs
@@ -1161,10 +1203,11 @@ float drive_servo(void)
     if (usart_debugging_mode_angle){
      usart_send_string_flash("Current Angle:");
      usart_send_num(angle, 5, 2);
-        usart_send_string_flash("\n");
+     usart_send_string_flash("\n");
     }
     
-    // Linearly map sevo angle to pulse with ranges.
+    // Linearly map sevo angle to pulse with ranges and move the servo
+    // to its new angle.
     OCR1B = (uint16_t)linear_mapping(angle, SERVO_MIN_ANGLE , SERVO_MAX_ANGLE,
                                      SERVO_MIN_PULSE_WIDTH,
                                      SERVO_MAX_PULSE_WIDTH);
@@ -1177,7 +1220,7 @@ float drive_servo(void)
     // usart_send_num(angle, 4, 2);
     // usart_send_byte('\n');
 
-    my_delay_us(200000UL); // let the servo settle at it's new angle
+    my_delay_ms(200UL); // let the servo settle at it's new angle
 
     return angle;
 }
@@ -1279,7 +1322,7 @@ float sonar(void){
     }
 
     // Wait about 60 ms for hardware to reset before next sonar ping
-    my_delay_us(60000UL);
+    my_delay_ms(60UL);
     
     // return distance in cm for OLED and serial monitor display
     return (distance_to_object_cm);
@@ -2033,9 +2076,9 @@ void oled_contrast_test(void)
     while (1)
     {
         u8g2.setContrast(1);
-        my_delay_us(2000000UL);
+        my_delay_ms(2000UL);
 
         u8g2.setContrast(255);
-        my_delay_us(2000000UL);
+        my_delay_ms(2000UL);
     }
 }
