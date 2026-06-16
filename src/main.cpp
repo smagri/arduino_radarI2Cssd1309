@@ -207,6 +207,9 @@ volatile bool flag_rx_done = 0; // Initialised to not complete.
 float cur_radar_angle;
 float cur_radar_distance_to_object_cm;
 
+// INT0 and INT1 event occurrence flags
+volatile bool flag_int0_button_event = 0;
+volatile bool flag_int1_button_event = 0;
 
 // Setup State Types
 typedef enum{
@@ -253,6 +256,8 @@ void oled_set_contrast(uint8_t oled_contrast);
 void my_delay_us(uint16_t delay_us);
 void my_delay_ms(uint32_t delay_ms);
 uint32_t get_system_time_ms(void);
+bool has_elapsed_ms(uint32_t start_time, uint32_t delay_ms);
+
 
 //  OLED radar display functions:
 float clamp_float(float value, float minimum, float maximum);
@@ -335,10 +340,11 @@ ISR(INT0_vect){
     //
     // my_delay_ms(10);
 
-    
-    _delay_ms(10);
-    if (!bitRead(PIND, pin_int0_interrupt))
-        flag_system_stop = 1;
+    flag_int0_button_event = 1;
+
+    // _delay_ms(10);
+    // if (!bitRead(PIND, pin_int0_interrupt))
+    //     flag_system_stop = 1;
 
     //usart_send_string("\ndbg: INT0_vect(): in ISR\n");
 }
@@ -373,22 +379,18 @@ ISR(INT1_vect){
     // does not work.
     //
     // my_delay_ms(10);
+    flag_int1_button_event = 1;
 
-    _delay_ms(10);
+    // _delay_ms(10);
     
-    if (!bitRead(PIND, pin_int1_interrupt))
-        flag_system_start = 1;
+    // if (!bitRead(PIND, pin_int1_interrupt))
+    //     flag_system_start = 1;
 
     //usart_send_string("\ndbg: INT1_vect(): in ISR\n");
 }
 
 
 // Timer2 overflow, which is really compare match A overflows in CTC mode.
-// ISR(TIMER2_COMPA_vect)
-// {
-//     num_timer2_overflows++;
-//     //num_timer2_compare_matches++;
-// }
 ISR(TIMER2_COMPA_vect)
 {
     system_time_ms++;
@@ -858,6 +860,68 @@ int main(void){
             usart_send_string_flash("\n");
         }
         
+        // Wait for  the Start button  to be pressed  to start
+        // our  system and  wait  for the  Stop  button to  be
+        // pressed to stop our system.  When either button has
+        // been pressed perform debouncing of the button.
+                
+        static bool start_debounce_active = 0;
+        static bool stop_debounce_active = 0;
+
+        static uint32_t start_debounce_time = 0;
+        static uint32_t stop_debounce_time = 0;
+
+
+        // INT1 start button debounce
+        if (flag_int1_button_event)
+        {
+            flag_int1_button_event = 0;
+
+            start_debounce_active = 1;
+            start_debounce_time = get_system_time_ms();
+        }
+        // After 10 ms, check if start button is still pressed
+        if (start_debounce_active
+            && has_elapsed_ms(start_debounce_time, 10UL)){
+            start_debounce_active = 0;
+
+            if (!bitRead(PIND, pin_int1_interrupt)){
+                flag_system_start = 1;
+            }
+        }
+
+        // INT0 stop button debounce.
+        //
+        // The  sytstem  became  unresponsive with  this  stop  button
+        // debouncing.   So  I removed  it  as  it is  not  essential,
+        // especially since  I have  seperate start and  stop buttons.
+        // Otherwise  it would  only  stop the  system  when the  stop
+        // button was pressed  down for a few moments  instead of just
+        // one quick  toggle of  the button.  Perhaps  when I  fix the
+        // overall  delays with  just  timer reads  this  will not  be
+        // neccessary.    However,  you   could   potentialy  have   a
+        // legitimate need  for the  forced delays,  so leave  it like
+        // this.
+        //
+        if (flag_int0_button_event)
+        {
+            flag_int0_button_event = 0;
+            flag_system_stop = 1;
+
+            // stop_debounce_active = 1;
+            // stop_debounce_time = get_system_time_ms();
+        }
+        // After 10 ms, check if stop button is still pressed
+        // if (stop_debounce_active
+        //     && has_elapsed_ms(stop_debounce_time, 10UL)){
+        //     stop_debounce_active = 0;
+
+        //     if (!bitRead(PIND, pin_int0_interrupt)){
+        //         flag_system_stop = 1;
+        //     }
+        // }
+
+                
         // Setup  state  machine  mode  transitions.
         if (flag_system_start){
 
@@ -888,7 +952,8 @@ int main(void){
             state_current = IDLE_MODE;
         }
 
-        
+
+                
         switch (state_current){
 
 
@@ -920,8 +985,10 @@ int main(void){
                 }
 
                 // Update ssd1309 OLED
-                radar_display_update(cur_radar_angle, cur_radar_distance_to_object_cm,
+                radar_display_update(cur_radar_angle,
+                                     cur_radar_distance_to_object_cm,
                                      object_detected);
+
                 
                 state_current = SERVO_MODE;
                 break;
