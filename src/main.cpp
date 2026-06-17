@@ -246,7 +246,8 @@ void adc_init(void);
 float sonar(void);
 float drive_servo(void);
 float linear_mapping(float x, float x1, float x2, float y1, float y2);
-
+void process_start_stop_buttons(void);
+    
 void led_pwm_on(void);
 void led_pwm_off(void);
 
@@ -850,93 +851,27 @@ int main(void){
         oled_set_contrast(oled_contrast);
         
 
-        if (usart_debugging_mode_adc){
-            usart_send_string_flash(">adc_raw:");
-            usart_send_num(adc_raw, 4, 0);
-            usart_send_string_flash("\n"); 
+        // if (usart_debugging_mode_adc){
+        //     usart_send_string_flash(">adc_raw:");
+        //     usart_send_num(adc_raw, 4, 0);
+        //     usart_send_string_flash("\n"); 
 
-            usart_send_string_flash(">oled_contrast:");
-            usart_send_num(oled_contrast, 3, 0);
-            usart_send_string_flash("\n");
-        }
-        
-        // Wait for  the Start button  to be pressed  to start
-        // our  system and  wait  for the  Stop  button to  be
-        // pressed to stop our system.  When either button has
-        // been pressed perform debouncing of the button.
-                
-        static bool start_debounce_active = 0;
-        static bool stop_debounce_active = 0;
-
-        static uint32_t start_debounce_time = 0;
-        static uint32_t stop_debounce_time = 0;
-
-
-        // INT1 start button debounce
-        if (flag_int1_button_event)
-        {
-            flag_int1_button_event = 0;
-
-            start_debounce_active = 1;
-            start_debounce_time = get_system_time_ms();
-        }
-        // After 10 ms, check if start button is still pressed
-        if (start_debounce_active
-            && has_elapsed_ms(start_debounce_time, 10UL)){
-            start_debounce_active = 0;
-
-            if (!bitRead(PIND, pin_int1_interrupt)){
-                flag_system_start = 1;
-            }
-        }
-
-        // INT0 stop button debounce.
-        //
-        // The  sytstem  became  unresponsive with  this  stop  button
-        // debouncing.   So  I removed  it  as  it is  not  essential,
-        // especially since  I have  seperate start and  stop buttons.
-        // Otherwise  it would  only  stop the  system  when the  stop
-        // button was pressed  down for a few moments  instead of just
-        // one quick  toggle of  the button.  Perhaps  when I  fix the
-        // overall  delays with  just  timer reads  this  will not  be
-        // neccessary.    However,  you   could   potentialy  have   a
-        // legitimate need  for the  forced delays,  so leave  it like
-        // this.
-        //
-        if (flag_int0_button_event)
-        {
-            flag_int0_button_event = 0;
-            flag_system_stop = 1;
-
-            // stop_debounce_active = 1;
-            // stop_debounce_time = get_system_time_ms();
-        }
-        // After 10 ms, check if stop button is still pressed
-        // if (stop_debounce_active
-        //     && has_elapsed_ms(stop_debounce_time, 10UL)){
-        //     stop_debounce_active = 0;
-
-        //     if (!bitRead(PIND, pin_int0_interrupt)){
-        //         flag_system_stop = 1;
-        //     }
+        //     usart_send_string_flash(">oled_contrast:");
+        //     usart_send_num(oled_contrast, 3, 0);
+        //     usart_send_string_flash("\n");
         // }
-
-                
+        
         // Setup  state  machine  mode  transitions.
-        if (flag_system_start){
 
-            // usart_send_string("\ndbg: flag_system_start\n");
-            // usart_send_num(flag_system_start, 1, 0);
-            // usart_send_string("\n");
-            
-            flag_system_start = 0;
-
-            led_pwm_on();
-            
-            state_current = SERVO_MODE;
-        }
-
-
+        // Wait for the Start button to be pressed to start our system
+        // and wait  for the  Stop button  to be  pressed to  stop our
+        // system.  When  start button  has been pressed  debounce the
+        // switch.   When   the  stop  button  has   been  pressed  no
+        // debouncing is  not neccessary.  Debouncing the  stop button
+        // also made the system unresponsive.
+        process_start_stop_buttons();
+        
+                
         if (flag_system_stop){
 
             // usart_send_string("\ndbg: flag_system_start\n");
@@ -950,6 +885,8 @@ int main(void){
             oled_clear();
     
             state_current = IDLE_MODE;
+
+            continue;
         }
 
 
@@ -961,6 +898,19 @@ int main(void){
 
                 //usart_send_string("dbg: in IDLE_MODE\n");
                 //my_delay_ms(1000UL);
+
+                if (flag_system_start){
+                    
+                    // usart_send_string("\ndbg: flag_system_start\n");
+                    // usart_send_num(flag_system_start, 1, 0);
+                    // usart_send_string("\n");
+            
+                    flag_system_start = 0;
+                    
+                    led_pwm_on();
+                    
+                    state_current = SERVO_MODE;
+                }
 
                 break;
             }
@@ -1607,6 +1557,68 @@ float linear_mapping(float x, float x1, float x2, float y1, float y2){
     // where slope = (y2 - y1) / (x2 - x1)
     return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
 }
+
+
+
+void process_start_stop_buttons(void){
+
+    static bool start_debounce_active = 0;
+    static bool stop_debounce_active = 0;
+
+    static uint32_t start_debounce_time = 0;
+    static uint32_t stop_debounce_time = 0;
+
+
+    // INT1 start button debounce
+    if (flag_int1_button_event)
+    {
+        flag_int1_button_event = 0;
+
+        start_debounce_active = 1;
+        start_debounce_time = get_system_time_ms();
+    }
+    // After 10 ms, check if start button is still pressed
+    if (start_debounce_active
+        && has_elapsed_ms(start_debounce_time, 10UL)){
+        start_debounce_active = 0;
+
+        if (!bitRead(PIND, pin_int1_interrupt)){
+            flag_system_start = 1;
+        }
+    }
+
+    // INT0 stop button debounce.
+    //
+    // The  sytstem  became  unresponsive with  this  stop  button
+    // debouncing.   So  I removed  it  as  it is  not  essential,
+    // especially since  I have  seperate start and  stop buttons.
+    // Otherwise  it would  only  stop the  system  when the  stop
+    // button was pressed  down for a few moments  instead of just
+    // one quick  toggle of  the button.  Perhaps  when I  fix the
+    // overall  delays with  just  timer reads  this  will not  be
+    // neccessary.    However,  you   could   potentialy  have   a
+    // legitimate need  for the  forced delays,  so leave  it like
+    // this.
+    //
+    if (flag_int0_button_event)
+    {
+        flag_int0_button_event = 0;
+        flag_system_stop = 1;
+
+        // stop_debounce_active = 1;
+        // stop_debounce_time = get_system_time_ms();
+    }
+    // After 10 ms, check if stop button is still pressed
+    // if (stop_debounce_active
+    //     && has_elapsed_ms(stop_debounce_time, 10UL)){
+    //     stop_debounce_active = 0;
+
+    //     if (!bitRead(PIND, pin_int0_interrupt)){
+    //         flag_system_stop = 1;
+    //     }
+    // }
+}
+                
 
 
 ///////////////////////////////////////////////////////////////////////////////
