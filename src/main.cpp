@@ -180,6 +180,11 @@ volatile bool flag_system_stop = 0;
 
 // Current ADC value read in ADC_vect ISR.
 volatile uint16_t adc_cur = 0;
+// Protected copy of current adc value
+uint16_t adc_raw;
+
+// Calculated OLED contrast from mapping current adc value
+uint8_t oled_contrast;
 
 // Counts the number  of ms, each 1ms  is a CTC compare  match of TC2.
 // Where TC2 prescaler is 64.
@@ -332,7 +337,6 @@ ISR(INT0_vect){
     // operation.   INT1 ISR  has been  configured to  be triggerd  on
     // falling edge, ie high to low, when the button is pressed.
     
-    // crude debouncing // TODO: implement proper debounceing code.
 
     // On the ATmega328P,  when an interrupt starts,  the AVR hardware
     // automatically clears the global interrupt  enable bit, the I bit
@@ -350,10 +354,6 @@ ISR(INT0_vect){
 
     flag_int0_button_event = 1;
 
-    // _delay_ms(10);
-    // if (!bitRead(PIND, pin_int0_interrupt))
-    //     flag_system_stop = 1;
-
     //usart_send_string("\ndbg: INT0_vect(): in ISR\n");
 }
 
@@ -367,8 +367,6 @@ ISR(INT1_vect){
     // configured to be triggerd on falling edge, ie high to low, when
     // the button is pressed.
     
-    // crude debouncing // TODO: implement proper debounceing code.
-
     // causes deadlock because it blocks forever as we are in this ISR
     // and  thus TC2  ISR  can not  be  retriggered and  my_delay_ms()
     // depends on TC2 ISR to be running.
@@ -388,11 +386,6 @@ ISR(INT1_vect){
     //
     // my_delay_ms(10);
     flag_int1_button_event = 1;
-
-    // _delay_ms(10);
-    
-    // if (!bitRead(PIND, pin_int1_interrupt))
-    //     flag_system_start = 1;
 
     //usart_send_string("\ndbg: INT1_vect(): in ISR\n");
 }
@@ -845,28 +838,25 @@ int main(void){
 
         usart_debugging();
 
-        uint16_t adc_raw;
-        uint8_t oled_contrast;
 
         // So ISR  does not corrupt  the current adc value  we disable
         // interrupts while accessing the ISR set adc value.
         cli();
         adc_raw = adc_cur;
         sei();
-
         oled_contrast =  get_adc_to_oled_contrast(adc_raw);
         oled_set_contrast(oled_contrast);
         
 
-        // if (usart_debugging_mode_adc){
-        //     usart_send_string_flash(">adc_raw:");
-        //     usart_send_num(adc_raw, 4, 0);
-        //     usart_send_string_flash("\n"); 
+        if (usart_debugging_mode_adc){
+            usart_send_string_flash(">adc_raw:");
+            usart_send_num(adc_raw, 4, 0);
+            usart_send_string_flash("\n"); 
 
-        //     usart_send_string_flash(">oled_contrast:");
-        //     usart_send_num(oled_contrast, 3, 0);
-        //     usart_send_string_flash("\n");
-        // }
+            usart_send_string_flash(">oled_contrast:");
+            usart_send_num(oled_contrast, 3, 0);
+            usart_send_string_flash("\n");
+        }
         
         // Setup  state  machine  mode  transitions.
 
