@@ -1537,8 +1537,12 @@ float sonar(void){
         }
     }
 
-    // Wait about 60 ms for hardware to reset before next sonar ping
-    my_delay_ms(60UL);
+    // Wait about 60 ms for hardware to reset before next sonar ping.
+    //
+    // Now done  in main while loop  to keep the system  responsive to
+    // all events.
+    //
+    // my_delay_ms(60UL);
     
     // return distance in cm for OLED and serial monitor display
     return (distance_to_object_cm);
