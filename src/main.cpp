@@ -913,7 +913,7 @@ int main(void){
             }
             case SERVO_MODE: {
 
-                usart_send_string("dbg: in SERVO_MODE\n");
+                //usart_send_string("dbg: in SERVO_MODE\n");
 
                 cur_radar_angle = drive_servo();
 
@@ -922,7 +922,7 @@ int main(void){
             }
             case SERVO_SETTLE_MODE : {
 
-                usart_send_string("dbg: in SERVO_SETTLE_MODE \n");
+                //usart_send_string("dbg: in SERVO_SETTLE_MODE \n");
 
                 if (has_elapsed_ms(start_time, 200UL)){
                     state_current = SONAR_MODE;
@@ -932,7 +932,7 @@ int main(void){
             }
             case SONAR_MODE: {
 
-                usart_send_string("dbg: in SONAR_MODE\n");
+                //usart_send_string("dbg: in SONAR_MODE\n");
 
                 cur_radar_distance_to_object_cm = sonar();
 
@@ -941,7 +941,7 @@ int main(void){
             }
             case SONAR_WAIT_MODE: {
 
-                usart_send_string("dbg: in SONAR_WAIT_MODE\n");
+                //usart_send_string("dbg: in SONAR_WAIT_MODE\n");
                 
                 if (has_elapsed_ms(start_time, SONAR_RESET_TIME_MS)){
                     state_current = UPDATE_OLED_MODE;
@@ -951,7 +951,7 @@ int main(void){
             }
             case UPDATE_OLED_MODE: {
 
-                usart_send_string("dbg: in UPDATE_OLED_MODE\n");
+                //usart_send_string("dbg: in UPDATE_OLED_MODE\n");
 
                 bool object_detected = (cur_radar_distance_to_object_cm >= 0.0f);
                 
@@ -1325,6 +1325,8 @@ void set_user_required_usart_debugging_mode(int8_t user_choice){
             usart_send_string_flash("\nSending sonar object distance measurments");
             usart_send_string_flash(" to PC via Serial Monitor\n");
             usart_debugging_mode_object_distance = 1;
+            usart_debugging_mode_angle = 0;
+            usart_debugging_mode_adc = 0;
             break;
         }
         case 2: {
@@ -1332,6 +1334,7 @@ void set_user_required_usart_debugging_mode(int8_t user_choice){
             usart_send_string_flash(" to PC via Serial Monitor\n");
             usart_debugging_mode_angle = 1;
             usart_debugging_mode_object_distance = 0;
+            usart_debugging_mode_adc = 0;
             break;
         }
         case 3: {
@@ -1339,6 +1342,7 @@ void set_user_required_usart_debugging_mode(int8_t user_choice){
             usart_send_string_flash(" to PC via Serial Monitor\n");
             usart_debugging_mode_object_distance = 1;
             usart_debugging_mode_angle = 1;
+            usart_debugging_mode_adc = 0;
             break;
         }
         case 4: {
