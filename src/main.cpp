@@ -72,6 +72,8 @@
 // RX recive buffer size for debugging
 #define BUFFER_SIZE 50
 
+#define SONAR_RESET_TIME_MS 60UL
+
 #define SERVO_MIN_PULSE_WIDTH 2000 // 1ms pulse measured on the oscilloscope.
 #define SERVO_MAX_PULSE_WIDTH 4000 // 2ms pulse measured on the oscilloscope.
 
@@ -183,6 +185,8 @@ volatile uint16_t adc_cur = 0;
 // Where TC2 prescaler is 64.
 volatile uint32_t system_time_ms = 0;
 
+// Initialises the start time for a delay timing.
+uint32_t start_time;
 
 // Our program buffer  that stores TX/RX data for the  Arduino that we
 // want to transmit from MCU->PC or recive data from the PC->MCU.
@@ -215,7 +219,9 @@ volatile bool flag_int1_button_event = 0;
 typedef enum{
     IDLE_MODE,
     SERVO_MODE,
-    SONAR_MODE
+    SONAR_MODE,
+    SONAR_WAIT_MODE,
+    UPDATE_OLED_MODE
 } State;
 
 volatile State state_current;
@@ -916,7 +922,7 @@ int main(void){
             }
             case SERVO_MODE: {
 
-                //usart_send_string("dbg: in SERVO_MODE\n");
+                usart_send_string("dbg: in SERVO_MODE\n");
 
                 cur_radar_angle = drive_servo();
                 state_current = SONAR_MODE;
@@ -925,9 +931,28 @@ int main(void){
             }
             case SONAR_MODE: {
 
-                //usart_send_string("dbg: in SONAR_MODE\n");
+                usart_send_string("dbg: in SONAR_MODE\n");
 
                 cur_radar_distance_to_object_cm = sonar();
+
+                start_time = get_system_time_ms();
+
+                state_current = SONAR_WAIT_MODE;
+            }
+            case SONAR_WAIT_MODE: {
+
+                usart_send_string("dbg: in SONAR_WAIT_MODE\n");
+                
+                if (has_elapsed_ms(start_time, SONAR_RESET_TIME_MS)){
+                    state_current = UPDATE_OLED_MODE;
+                }
+                
+                break;
+            }
+            case UPDATE_OLED_MODE: {
+
+                usart_send_string("dbg: in UPDATE_OLED_MODE\n");
+
                 bool object_detected = (cur_radar_distance_to_object_cm >= 0.0f);
                 
                 if (!object_detected) {
@@ -941,6 +966,7 @@ int main(void){
 
                 
                 state_current = SERVO_MODE;
+
                 break;
             }
             default:
