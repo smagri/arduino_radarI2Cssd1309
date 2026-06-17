@@ -219,6 +219,7 @@ volatile bool flag_int1_button_event = 0;
 typedef enum{
     IDLE_MODE,
     SERVO_MODE,
+    SERVO_SETTLE_MODE,
     SONAR_MODE,
     SONAR_WAIT_MODE,
     UPDATE_OLED_MODE
@@ -925,8 +926,18 @@ int main(void){
                 usart_send_string("dbg: in SERVO_MODE\n");
 
                 cur_radar_angle = drive_servo();
-                state_current = SONAR_MODE;
 
+                start_time = get_system_time_ms();
+                state_current = SERVO_SETTLE_MODE;
+            }
+            case SERVO_SETTLE_MODE : {
+
+                usart_send_string("dbg: in SERVO_SETTLE_MODE \n");
+
+                if (has_elapsed_ms(start_time, 200UL)){
+                    state_current = SONAR_MODE;
+                }
+                
                 break;
             }
             case SONAR_MODE: {
@@ -936,7 +947,6 @@ int main(void){
                 cur_radar_distance_to_object_cm = sonar();
 
                 start_time = get_system_time_ms();
-
                 state_current = SONAR_WAIT_MODE;
             }
             case SONAR_WAIT_MODE: {
@@ -1027,7 +1037,8 @@ void my_delay_ms(uint32_t delay_ms)
 {
 
     // Efficient    ms    delay     routine,    using    TIMER2    ISR
-    // (TIMER2_COMPA_vect) as 1ms compare match routine.
+    // (TIMER2_COMPA_vect) as  1ms compare match routine.   Note, this
+    // routine is still a blocking routine.
 
     
     uint32_t start_time = get_system_time_ms();
@@ -1436,7 +1447,7 @@ float drive_servo(void)
     // usart_send_num(angle, 4, 2);
     // usart_send_byte('\n');
 
-    my_delay_ms(200UL); // let the servo settle at it's new angle
+    //my_delay_ms(200UL); // let the servo settle at it's new angle
 
     return angle;
 }
