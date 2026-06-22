@@ -767,7 +767,7 @@ int main(void){
 
             display.clearDisplay();
             display.display();
-
+    
             state_current = IDLE_MODE;
         }
 
